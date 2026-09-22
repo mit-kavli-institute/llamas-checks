@@ -2,12 +2,13 @@
 
 Automatic quality checks for **raw LLAMAS frames**, run by the LLAMAS observing GUI on each
 frame as it is written and usable from the command line at the telescope. The checks work on
-multi-extension FITS files straight off the instrument, before any reduction, and answer one
-question: *is this frame good, or do I need to take it again?* They look for four classes of
-problem — shutter faults, camera warming or loss of cooling, odd detector structure, and
-saturation — and run **per detector** across all 24 extensions, so a fault on one camera is
-reported by name rather than hidden in a frame-wide average. The package is standalone: it does
-not import or require the `llamas-pyjamas` reduction pipeline, whose own QA (fibre-trace counts,
+multi-extension FITS files straight off the instrument, before any reduction takes place.
+
+They look for four classes of problems: shutter faults, camera warming or loss of cooling, odd detector structure, and
+saturation. It runs **per detector** across all 24 extensions, so a fault on one camera is
+reported by name rather than hidden in a frame-wide average. 
+
+The package is standalone: it does not import or require the `llamas-pyjamas` reduction pipeline, whose own QA (fibre-trace counts,
 wavelength-solution and flat-field validation) runs later on reduced products.
 
 ## Install
@@ -39,8 +40,7 @@ llamas-checks /path/to/LLAMAS_..._mef.fits -v
 ```
 
 **Always use `-v` interactively.** Without it the tool is deliberately silent and reports only
-through its exit code — right for the GUI and for scripts, useless when you are watching the
-screen. With `-v` you get a one-line verdict, a `structure:` line (extensions present, missing
+through its exit code. With `-v` you get a one-line verdict, a `structure:` line (extensions present, missing
 cameras, placeholders), and a line for every check that fired, naming the detector responsible.
 
 - `--report out.json` writes the full per-check detail to a file — useful for the night log or
@@ -149,8 +149,7 @@ from the header product category (`PRODCATG`), not from the `OBJECT` string.
 
 Each camera is judged against **its own** healthy operating temperature, not against a single
 number for the whole array. The detectors' normal temperatures differ by around 26 °C, and the
-red cameras legitimately run warmest, so a shared threshold would either flag the reds constantly
-or be too loose to catch anything. A camera warns at 8 °C above its own baseline (10 °C for the
+red cameras run warmest. A camera warns at 8 °C above its own baseline (10 °C for the
 reds) and fails at 15 °C (16 °C for the reds), with an absolute failure above −60 °C where the
 cooler is at its limit.
 
