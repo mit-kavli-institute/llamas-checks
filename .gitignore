@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.DS_Store
+
+# QA run outputs
+*.qa.json
+qa_stats_raw.json
+qa_test_results.json
+batch_tally.json
+
+# raw frames never belong in the repo
+*mef.fits

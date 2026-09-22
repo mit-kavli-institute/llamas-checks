@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llamas-checks"
+version = "0.1.0"
+description = "Automatic raw-frame quality checks for the Magellan LLAMAS IFU, run by the observing GUI"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    {name = "MIT Kavli Institute for Astrophysics and Space Research"},
+]
+dependencies = [
+    "numpy>=1.26",
+    "astropy>=6.1",
+    "pyyaml>=6",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+llamas-checks = "llamas_checks.QA_assess:main"
+llamas-checks-engine = "llamas_checks.qa_engine:main"
+llamas-checks-validate = "llamas_checks.qa_config_validator:main"
+
+[tool.setuptools.packages.find]
+include = ["llamas_checks*"]
+
+[tool.setuptools.package-data]
+llamas_checks = ["configs/*.yaml", "baselines/*.json", "baselines/*.csv"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
