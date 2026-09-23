@@ -7,7 +7,9 @@ Region convention (2048x2048; illuminated fibre stack ~y[32:2004]):
   bottom_stripe = y[2:28],   x[100:1948]   (unilluminated)
   top_stripe    = y[2020:2046], x[100:1948] (unilluminated)
 These stripes are the per-detector bias/background reference on ANY frame type.
-Structure metrics follow the engine definition (std of the collapsed profile).
+Structure metrics follow the engine definition (std of the per-row/column
+2 %-trimmed-mean profile, qa_engine.trimmed_mean_profile); full_std is the robust
+1.4826*MAD sigma (full_std_plain = np.std).
 Placeholder/missing extensions (constant-valued frames) are skipped.
 
 The copies/ folder comes from --copies-dir, or <baselines-root>/copies where the
@@ -22,6 +24,8 @@ import sys
 
 import numpy as np
 from astropy.io import fits
+
+from llamas_checks.qa_engine import trimmed_mean_profile
 
 SAT = 63000.0
 BOT = (slice(2, 28), slice(100, 1948))       # (y, x)
@@ -65,11 +69,15 @@ def extract_file(path):
                     recs.append(rec); continue
                 finite = v[np.isfinite(v)]
                 bot = v[BOT]; top = v[TOP]
-                rowprof = np.nanmean(v, axis=1)   # collapse X -> profile over rows
-                colprof = np.nanmean(v, axis=0)   # collapse Y -> profile over cols
+                # Engine definitions: structure = std of the per-row/column 2 %-trimmed
+                # means, rms = 1.4826*MAD (both immune to hot pixels / cosmic rays).
+                rowprof = trimmed_mean_profile(v, axis=1)   # collapse X -> profile over rows
+                colprof = trimmed_mean_profile(v, axis=0)   # collapse Y -> profile over cols
+                full_med = float(np.nanmedian(v))
                 rec.update(
-                    full_med=float(np.nanmedian(v)),
-                    full_std=float(np.nanstd(v)),
+                    full_med=full_med,
+                    full_std=float(1.4826 * np.nanmedian(np.abs(finite - full_med))),
+                    full_std_plain=float(np.nanstd(v)),
                     full_mean=float(np.nanmean(v)),
                     full_p99=float(np.nanpercentile(finite, 99)),
                     full_max=vmax,

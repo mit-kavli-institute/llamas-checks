@@ -1,4 +1,4 @@
-# LLAMAS science QA config -- GENERATED from robust baseline analysis (2026-04-07/05-02/06-30). See QA_TESTS_SUMMARY.md; regenerate via scripts/gen_configs.py.
+# LLAMAS science QA config -- GENERATED from robust baseline analysis (2026-04-07/05-02/06-30; trimmed-mean structure profiles + MAD rms, WARN/FAIL tiers, 2026-09). See docs/QA_CHECKS_CATALOGUE.md; regenerate via scripts/gen_configs.py.
 config_version: '1.0'
 instrument:
   name: LLAMAS
@@ -146,7 +146,7 @@ metrics:
   median:
     type: median
   rms:
-    type: std
+    type: robust_std
   saturated_fraction:
     type: fraction_above
     threshold: 63000
@@ -282,6 +282,13 @@ rule_sets:
       severity: WARN
       limits:
         max: 0.02
+    - name: edge_saturated
+      region: bottom_stripe
+      metric: median
+      per_extension: true
+      severity: FAIL
+      limits:
+        max: 63000.0
     - name: camera_warming_gradient
       region: full_frame
       metric: background_gradient_rate

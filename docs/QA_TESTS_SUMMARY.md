@@ -6,7 +6,17 @@ YAML-driven quality-assurance checks for LLAMAS multi-extension (MEF) frames, ru
 depend on `llamas-pyjamas`.
 
 > For the current check catalogue, per-detector thresholds and the bad-image regression cases
-> (re-run 2026-09-22) see `QA_CHECKS_CATALOGUE.md` and the generated `QA_THRESHOLDS_TABLES.md`.
+> (re-run 2026-09-22) see `QA_CHECKS_CATALOGUE.md` and the generated `QA_THRESHOLDS_TABLES.md`;
+> worked examples with images are in `QA_EXAMPLES.md`.
+>
+> **2026-09-22 revision (branch `fail-issues`).** The structure metrics now use the per-row /
+> per-column *2 %-trimmed means* and the rms check uses the MAD-based robust sigma (the July design below
+> used means and a plain std, which a ~20-pixel saturated cluster could trip). Severities were
+> re-tiered: on bias/dark, structure and saturation are WARN at the per-detector cap and FAIL
+> only at 4× the cap (`*_gross`) or above 1 % saturated pixels (`saturation_gross`); structure on
+> sky flats is WARN; every rule set gained `edge_saturated` (unilluminated stripe at the ADC
+> ceiling → FAIL), which is what catches railed LDLS flats. Where this document says structure
+> is "FAIL on bias/dark", read the catalogue for the current tiering.
 
 | Config | Applies to | Rule sets |
 |---|---|---|

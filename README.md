@@ -111,20 +111,35 @@ where you tell it to.
 Applies to bias, dark, ThAr arc, LDLS lamp flat and twilight/sky flat. The frame type is taken
 from the header product category (`PRODCATG`), not from the `OBJECT` string.
 
+**FAIL is reserved for unambiguous defects; anything that is merely "high" is a WARN.** A FAIL
+on a bias means the frame is not usable as a bias, not that one detector is noisier than usual.
+
 | Check | What it catches | Level |
 |---|---|---|
 | Shutter vs requested time | shutter stuck open, exposure aborted or truncated | **FAIL** |
-| Row / column structure | banding, blooming, or a warming glow on an unilluminated frame | **FAIL** (all cal types) |
-| Saturation | light leak or saturated pixels (above 63000 ADU) | **FAIL** on bias, WARN elsewhere |
+| Edge stripe saturated | light flooding the unilluminated edge of the detector: a railed or grossly overexposed frame | **FAIL** (every frame type, incl. science) |
+| Row / column structure | banding, bars, a warming glow | bias/dark: WARN above the detector's cap, **FAIL** above 4× the cap; LDLS and ThAr (fixed lamp): **FAIL** above the cap; sky flats: WARN |
+| Saturation | light leak or saturated pixels (above 63000 ADU) | WARN above the detector's cap; bias/dark **FAIL** above 1 % of the frame |
 | CCD temperature — warm / hot / shut-off | cooling degrading or failed | WARN / **FAIL** / **FAIL** |
 | Background level and read noise | bias-level drift, excess noise | WARN |
 
 - Whole-frame level and read-noise checks are **not** applied to arcs and flats, because
   brightness scales with exposure time and a fixed level band would be meaningless. The
   unilluminated edge strip is still checked on every frame type.
+- Structure is the standard deviation of the per-row (or per-column) **2 %-trimmed means** (the
+  brightest and faintest 2 % of each line are dropped before averaging), and read noise is the
+  MAD-based robust sigma. Hot pixels, hot-column fragments and cosmic rays therefore do not move
+  them; whole-row/column banding, bars and glow gradients do. (Until 2026-09 these used plain
+  means and a plain std, and a ~20-pixel saturated cluster could FAIL an otherwise perfect bias.)
 - The structure limits are set separately for each detector and are deliberately generous:
-  naturally structured detectors, and red ThAr arcs that normally saturate, pass comfortably.
-  A trip means a **gross** anomaly, not marginal texture.
+  naturally structured detectors (4.A.Red's left-edge glow, 3.A.Blue's fixed banding) and red
+  ThAr arcs that normally saturate pass comfortably. On LDLS flats the red detectors are commonly
+  railed at the longer exposures observers take for the blue channel (the calibration script
+  suggests 0.07 / 0.15 / 0.3 / 0.5 s, but exposure times are the observer's choice); that is
+  normal and does not fire. A saturated *edge stripe* is what marks an overexposed flat, and it
+  does not depend on the exposure time used.
+- Worked examples with images of frames that pass, warn and fail are in
+  [`docs/QA_EXAMPLES.md`](docs/QA_EXAMPLES.md).
 - Cameras missing from the frame are skipped, never failed. A missing camera appears as a
   placeholder extension (a constant frame of all-ones in real frames, all-zeros from the pipeline
   validator; any other constant frame, e.g. a railed detector, is evaluated normally) or as an
@@ -321,6 +336,8 @@ from these environment variables, which are only argparse defaults:
 | `LLAMAS_QA_BASELINES` | `--baselines-root` | the `QA_baselines` folder: `copies/` (untouched originals) plus the sorted `Bias/ Darks/ Arcs/ lamp_flats/ twilight_flats/` |
 | `LLAMAS_QA_WARM_DIR` | `--warm-dir` | the 2026-05-06 warm-incident frames (validation only) |
 | `LLAMAS_QA_COMMISSIONING_DIR` | `--commissioning-dir` | the `ut20260710_11` commissioning frames (validation only) |
+| `LLAMAS_QA_SEPT06_DIR` | `--sept06-dir` | `Llamas_Commissioning_Data/20260906_07_cals` (validation and examples only) |
+| `LLAMAS_QA_SEPT07_DIR` | `--sept07-dir` | `Llamas_Commissioning_Data/20260907_08` (validation and examples only) |
 
 For example:
 
@@ -334,12 +351,17 @@ Then:
 
 ```bash
 python scripts/sort_baselines.py                 # copies/ -> per-type folders + manifest.csv (idempotent)
-python scripts/extract_stats.py                  # per-file, per-extension stats -> ./qa_stats_raw.json (--jobs 6)
-python scripts/aggregate_thresholds.py           # -> llamas_checks/baselines/qa_thresholds_derived.json + qa_tracking_baselines.csv
+python scripts/extract_stats.py --out llamas_checks/baselines/qa_stats_raw.json   # per-file, per-extension stats (--jobs 6)
+python scripts/aggregate_thresholds.py --raw llamas_checks/baselines/qa_stats_raw.json  # -> qa_thresholds_derived.json + qa_tracking_baselines.csv
 python scripts/gen_configs.py                    # -> llamas_checks/configs/qa_config_{cal,science}.yaml
 llamas-checks-validate llamas_checks/configs/qa_config_cal.yaml
 llamas-checks-validate llamas_checks/configs/qa_config_science.yaml
+python scripts/gen_thresholds_doc.py             # -> docs/QA_THRESHOLDS_TABLES.md
+python scripts/gen_examples_doc.py               # -> docs/QA_EXAMPLES.md + docs/images/ (needs all five data roots)
 ```
+
+The raw per-extension statistics are committed (`llamas_checks/baselines/qa_stats_raw.json`), so
+everything from `aggregate_thresholds.py` onwards can be reproduced without the baseline frames.
 
 `aggregate_thresholds.py` prints its self-checks (band breaches among normal frames, the held-out
 June-2026 odd dark against the dark structure caps, and — when `--warm-dir` is set — the warm
@@ -352,7 +374,7 @@ Two validation scripts sit beside them:
 
 ```bash
 python scripts/batch_tally.py        # all baseline files per type, in-process, no .qa.json written -> ./batch_tally.json
-python scripts/run_qa_tests.py       # the 15-case matrix through the engine CLI (writes .qa.json next to the inputs) -> ./qa_test_results.json
+python scripts/run_qa_tests.py       # the 23-case matrix through the engine CLI (writes .qa.json next to the inputs) -> ./qa_test_results.json
 ```
 
 `run_qa_tests.py` skips any case whose root is unset or whose file is absent (`MISSING FILE`).
@@ -370,10 +392,11 @@ llamas_checks/                 the package
   validate.py                  MEF structure inspection (inspect_structure, detector_label)
   paths.py                     CONFIG_DIR, BASELINES_DIR, shipped config names
   configs/                     qa_config.yaml (base), qa_config_cal.yaml, qa_config_science.yaml (generated)
-  baselines/                   qa_thresholds_derived.json, qa_tracking_baselines.csv
-scripts/                       threshold pipeline + validation scripts (see above)
+  baselines/                   qa_stats_raw.json (per-extension baseline stats), qa_thresholds_derived.json, qa_tracking_baselines.csv
+scripts/                       threshold pipeline + validation + doc generators (see above)
 tests/                         pytest suite
 docs/QA_CHECKS_CATALOGUE.md    every check, its threshold, and the bad-image test cases (start here)
+docs/QA_EXAMPLES.md            real frames that pass, warn and fail, with images (scripts/gen_examples_doc.py)
 docs/QA_THRESHOLDS_TABLES.md   generated per-detector limits (scripts/gen_thresholds_doc.py)
 docs/QA_TESTS_SUMMARY.md       design rationale, provenance and the July-2026 validation run
 ```
@@ -388,7 +411,8 @@ pytest tests/
 The tests build small synthetic MEF files, so no instrument data is needed.
 
 What each test asserts, the real bad-frame regression cases and the current thresholds are
-catalogued in [`docs/QA_CHECKS_CATALOGUE.md`](docs/QA_CHECKS_CATALOGUE.md).
+catalogued in [`docs/QA_CHECKS_CATALOGUE.md`](docs/QA_CHECKS_CATALOGUE.md); pictures of frames
+that pass, warn and fail are in [`docs/QA_EXAMPLES.md`](docs/QA_EXAMPLES.md).
 
 ## Licence
 

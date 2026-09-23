@@ -9,6 +9,8 @@ dist/
 # QA run outputs
 *.qa.json
 qa_stats_raw.json
+# ...except the committed baseline statistics the thresholds are derived from
+!llamas_checks/baselines/qa_stats_raw.json
 qa_test_results.json
 batch_tally.json
 

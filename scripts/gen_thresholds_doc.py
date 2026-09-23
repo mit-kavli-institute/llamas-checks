@@ -60,8 +60,11 @@ def cal_type_section(name, prodcatg, has_level, detectors, tables, derived):
     for mode in modes_in(edge):
         header = ["detector", "n baseline", "edge-bg min", "edge-bg max"]
         if level:
-            header += ["level min", "level max", "rms max"]
-        header += ["row max", "col max", "sat frac max"]
+            header += ["level min", "level max", "rms (robust) max"]
+        header += ["row max", "col max"]
+        if has_level:
+            header += ["row FAIL max (4x)", "col FAIL max (4x)"]
+        header += ["sat frac max"]
         rows = []
         for det in detectors:
             e = edge.get(det, {}).get(mode)
@@ -72,7 +75,10 @@ def cal_type_section(name, prodcatg, has_level, detectors, tables, derived):
             if level:
                 lv = level.get(det, {}).get(mode)
                 row += [lv and lv["med_min"], lv and lv["med_max"], lv and lv["rms_max"]]
-            row += [s and s["row_max"], s and s["col_max"], f and f["frac_max"]]
+            row += [s and s["row_max"], s and s["col_max"]]
+            if has_level:
+                row += [s and s.get("row_fail_max"), s and s.get("col_fail_max")]
+            row += [f and f["frac_max"]]
             rows.append(row)
         out += [f"### {name} — readout mode {mode}", "", table(header, rows), ""]
     return out
@@ -155,7 +161,11 @@ def main() -> int:
         "",
         "Units: ADU for levels, RMS and structure metrics; fraction of pixels for saturation; °C for temperature; "
         "seconds for shutter tolerances. Level and edge-background limits are a min–max band (WARN outside); "
-        "RMS, structure and saturation are one-sided caps. \"—\" means that readout mode is not modelled for "
+        "RMS (1.4826 x MAD), structure (std of the per-row / per-column medians) and saturation are one-sided "
+        "caps. On BIAS/DARK the row/col caps are WARN and the 4x \"FAIL max\" columns are the `*_gross` FAIL "
+        "tier; on LDLS/ARC the structure cap is FAIL, on SKY it is WARN. Static FAIL rules on every set: "
+        "`edge_saturated` (bottom-stripe median > 63000 ADU) and, on BIAS/DARK, `saturation_gross` "
+        "(> 1 % of pixels above 63000 ADU). \"—\" means that readout mode is not modelled for "
         "that detector (the rule is SKIPPED, never failed). A missing camera in a frame is a placeholder "
         "extension and is skipped.",
         "",

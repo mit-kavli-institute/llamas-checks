@@ -61,6 +61,7 @@ class QAConfigValidator:
         "mean",
         "median",
         "std",
+        "robust_std",
         "min",
         "max",
         "percentile",

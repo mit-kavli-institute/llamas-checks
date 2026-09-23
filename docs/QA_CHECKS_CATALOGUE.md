@@ -1,10 +1,17 @@
 # LLAMAS raw-frame QA — check catalogue, thresholds and bad-image test cases
 
-Status as of **2026-09-22** (`llamas-checks` 0.1.0). Every example result below was produced by
-re-running the shipped package on the frame named, on this date. The per-detector numbers behind
-the checks are in the generated appendix [`QA_THRESHOLDS_TABLES.md`](QA_THRESHOLDS_TABLES.md);
-the design rationale and the original July-2026 validation campaign are in
-[`QA_TESTS_SUMMARY.md`](QA_TESTS_SUMMARY.md).
+Status as of **2026-09-22** (`llamas-checks` 0.1.0, branch `fail-issues`: trimmed-mean
+structure metrics, MAD rms and WARN/FAIL severity tiers). Every example result below was produced by re-running the shipped
+package on the frame named, on this date. The per-detector numbers behind the checks are in the
+generated appendix [`QA_THRESHOLDS_TABLES.md`](QA_THRESHOLDS_TABLES.md); pictures of frames that
+pass, warn and fail are in [`QA_EXAMPLES.md`](QA_EXAMPLES.md); the design rationale and the
+original July-2026 validation campaign are in [`QA_TESTS_SUMMARY.md`](QA_TESTS_SUMMARY.md).
+
+**Severity policy.** FAIL is reserved for defects that make the frame unusable for its purpose
+(shutter fault, a saturated unilluminated edge stripe, gross banding on a bias/dark, a camera past
+its temperature limit). Anything that is merely high relative to the baselines is WARN. This
+replaces the pre-2026-09 behaviour in which one detector 1.5× above its structure cap FAILed
+22 of 24 FAST biases on a normal night.
 
 Contents
 
@@ -78,49 +85,74 @@ Severity: **FAIL** blocks the verdict (exit 2); **WARN** flags but passes (exit 
 means the limit comes from a lookup table keyed on detector name and readout mode (appendix);
 "per det" means keyed on detector only.
 
-### BIAS (`CAL.R-BIA`) — 10 rules
+Metric definitions used below (all robust to isolated hot pixels, hot-column fragments and
+cosmic rays since 2026-09):
+
+- **row / column structure** — standard deviation of the per-row (per-column) **2 %-trimmed
+  means** of the region (the lowest and highest 2 % of each line are dropped before averaging).
+  Whole-row/column offsets (banding, bars) and smooth glow gradients move it; a cluster of
+  saturated pixels or a cosmic-ray trail (< 2 % of a line) does not. A plain median profile was
+  tried and rejected: it missed the June-4 bars, which occupy a minority of each column.
+- **robust rms** — 1.4826 × median absolute deviation of the pixels (read noise).
+- **median**, **fraction > 63000 ADU** — as named.
+
+### BIAS (`CAL.R-BIA`) — 13 rules
 
 | rule | what is measured | limit | severity |
 |---|---|---|---|
 | `shutter_exptime_consistency` | \|SEXPTIME − REXPTIME\| | passes within abs 0.214 s **or** rel 10 % | FAIL |
 | `edge_background_level` | median of `bottom_stripe` | band [min, max], per det × mode | WARN |
+| `edge_saturated` | median of `bottom_stripe` | ≤ 63000 ADU (static) | FAIL |
 | `frame_level_median` | median of `full_frame` | band [med_min, med_max], per det × mode | WARN |
-| `frame_noise_rms` | std of `full_frame` | ≤ rms_max, per det × mode | WARN |
-| `row_structure` | row-banding amplitude of `full_frame` (std of the per-row means) | ≤ row_max, per det × mode | FAIL |
-| `column_structure` | column-banding amplitude of `full_frame` (std of the per-column means) | ≤ col_max, per det × mode | FAIL |
-| `saturation_fraction` | fraction of `full_frame` pixels > 63000 ADU | ≤ frac_max, per det × mode (≈ 5 × 10⁻⁴) | FAIL |
+| `frame_noise_rms` | robust rms of `full_frame` | ≤ rms_max, per det × mode | WARN |
+| `row_structure` / `column_structure` | banding amplitude of `full_frame` | ≤ row_max / col_max, per det × mode | WARN |
+| `row_structure_gross` / `column_structure_gross` | same metric | ≤ 4 × row_max / col_max (`row_fail_max`, `col_fail_max`) | FAIL |
+| `saturation_fraction` | fraction of `full_frame` pixels > 63000 ADU | ≤ frac_max, per det × mode (≈ 5 × 10⁻⁴) | WARN |
+| `saturation_gross` | same metric | ≤ 0.01 (static) | FAIL |
 | `ccd_temperature_warm` | `CCDTEMP_1` / `CCDTEMP1` / `CCDTEMP-1` of this extension | within [−140, warn_max], per det | WARN |
 | `ccd_temperature_hot` | same keyword | ≤ fail_max, per det | FAIL |
 | `ccd_temperature_shutoff` | same keyword | ≤ −60 °C, all cameras | FAIL |
 
-### DARK (`CAL.R-DRK`) — 10 rules
+### DARK (`CAL.R-DRK`) — 13 rules
 
-Identical to BIAS with the DARK tables, except: shutter abs tolerance 0.238 s, and
-`saturation_fraction` is **WARN** (hot pixels are tolerated on a 600 s dark). Row/column structure
-stays FAIL.
+Identical to BIAS with the DARK tables; shutter abs tolerance 0.238 s.
 
-### LDLS_FLAT (`CAL.R-FLT`), SKY_FLAT (`CAL.R-SKY`), ARC_THAR (`CAL.R-ARC`) — 9 rules each
+### LDLS_FLAT (`CAL.R-FLT`), ARC_THAR (`CAL.R-ARC`) — 10 rules each (fixed lamp)
 
 | rule | what is measured | limit | severity |
 |---|---|---|---|
-| `shutter_exptime_consistency` | \|SEXPTIME − REXPTIME\| | abs 0.252 s (LDLS) / 0.348 s (SKY) / 0.328 s (ARC) **or** rel 10 % | FAIL |
+| `shutter_exptime_consistency` | \|SEXPTIME − REXPTIME\| | abs 0.252 s (LDLS) / 0.328 s (ARC) **or** rel 10 % | FAIL |
 | `edge_background_level` | median of `bottom_stripe` | band, per det × mode | WARN |
+| `edge_saturated` | median of `bottom_stripe` | ≤ 63000 ADU | FAIL |
 | `row_structure` / `column_structure` | banding amplitude of `full_frame` | ≤ heavy-tail cap, per det × mode | FAIL |
 | `saturation_fraction` | fraction > 63000 ADU | ≤ frac_max, per det × mode | WARN |
 | `ccd_temperature_warm` / `_hot` / `_shutoff` | `CCDTEMP*` per extension | as BIAS | WARN / FAIL / FAIL |
 
+### SKY_FLAT (`CAL.R-SKY`) — 10 rules
+
+As LDLS/ARC with the SKY tables and shutter abs tolerance 0.348 s, except that
+`row_structure` / `column_structure` are **WARN**: the structure metric scales with the twilight
+brightness, which varies by design (four "good blue" twilights on 2026-09-06 sat 1.0–1.2× above
+the caps).
+
 No `frame_level_median` or `frame_noise_rms` on illuminated frames: the level scales with exposure
 time, so a fixed band is not physical. The structure caps for these types are deliberately loose
 (1.5 × the worst normal frame, see §5) so real fibre and line structure passes; only a gross
-anomaly trips them. Red ThAr arcs normally saturate, which is why saturation is WARN here and
-structure, not saturation, is the defect discriminator.
+anomaly trips them. LDLS exposure times are the observer's choice (the calibration script
+suggests 0.07 / 0.15 / 0.3 / 0.5 s and most nights use it, but nothing enforces it); at the
+longer exposures taken for the blue channel the red detectors rail over most of the fibre area,
+so red saturation is not a defect on an LDLS flat and the per-detector red saturation caps,
+derived from baseline nights that include such frames, are effectively open. What marks an
+overexposed or light-flooded flat is `edge_saturated`: the unilluminated stripe never exceeds
+~5000 ADU on a normal frame of any type or exposure time in the baselines.
 
-### SCIENCE (`SCI.R-*`) — 6 rules
+### SCIENCE (`SCI.R-*`) — 7 rules
 
 | rule | what is measured | limit | severity |
 |---|---|---|---|
 | `shutter_exptime_consistency` | \|SEXPTIME − REXPTIME\| | abs 1.0 s **or** rel 10 % | FAIL |
 | `saturation_fraction` | fraction of `full_frame` > 63000 ADU | ≤ 0.02 | WARN |
+| `edge_saturated` | median of `bottom_stripe` | ≤ 63000 ADU | FAIL |
 | `camera_warming_gradient` | background-gradient **rate**: max(\|median(bottom ¼) − median(top ¼)\|, \|median(left ¼) − median(right ¼)\|) ÷ exposure time (`SEXPTIME` → `REXPTIME` → `EXPTIME`) | ≤ 1.3 ADU/s; skipped when exposure < 8 s | WARN |
 | `ccd_temperature_warm` / `_hot` / `_shutoff` | `CCDTEMP*` per extension | as BIAS (same `temp` table) | WARN / FAIL / FAIL |
 
@@ -134,6 +166,9 @@ caught by the gradient *rate*, because dark current accrues per second while sky
 |---|---|---|
 | saturation pixel level | > 63000 ADU | all `saturation_fraction` rules |
 | science saturation fraction | ≤ 0.02 (WARN) | SCIENCE |
+| gross saturation fraction | > 0.01 → FAIL (`saturation_gross`) | BIAS, DARK |
+| edge stripe saturated | `bottom_stripe` median > 63000 ADU → FAIL (`edge_saturated`) | every rule set |
+| gross structure factor | FAIL above 4 × the per-detector WARN cap (`*_gross`) | BIAS, DARK |
 | shutter relative tolerance | 10 % | all types |
 | shutter absolute tolerance | BIAS 0.214 s · DARK 0.238 s · LDLS 0.252 s · SKY 0.348 s · ARC 0.328 s · SCIENCE 1.0 s | per type |
 | camera-warming gradient rate | ≤ 1.3 ADU/s (WARN), `min_exptime` 8 s | SCIENCE |
@@ -163,21 +198,27 @@ held out for validation. The bias subset is 48 frames:
 | 2026-05-02 | 1 | 0 |
 | 2026-06-30 | 11 | 11 |
 
-Per (type × readout mode × detector), 3344 normal detector-frame records in total:
+Per (type × readout mode × detector), 3344 normal detector-frame records in total (re-derived
+2026-09-22 with the trimmed-mean structure profiles and the MAD rms; the per-extension statistics
+are committed as `llamas_checks/baselines/qa_stats_raw.json`, so everything below is reproducible
+without the frames):
 
 - Samples are **MAD sigma-clipped** first, so an anomalous baseline frame cannot inflate its own cap.
 - Level and edge-background bands: `median ± max(6 σ_robust, 15 ADU)` — an absolute ADU floor.
-- RMS cap: `max(median + 8 σ_robust, 3 × median, 5.0)`.
+- RMS cap: `max(median + 8 σ_robust, 3 × median, 5.0)` on the robust rms; caps are now read-noise
+  level (5 ADU on most SLOW detectors, 11–13 ADU FAST, 74 ADU on 4.A.Red FAST) instead of the
+  25–3800 ADU plain-std caps that hot pixels used to inflate.
 - Row/column structure and saturation caps are **heavy-tail**: `max(1.5 × unscreened max, median + 8 σ_robust, floor)`
   with floors 2.0 (structure) and 5 × 10⁻⁴ (saturation). Persistently structured detectors keep their
-  own loose cap instead of false-failing.
+  own loose cap instead of false-failing. On BIAS/DARK the cap is the WARN tier; the FAIL tier is 4 × the cap.
 - CCD temperature: each camera's own sigma-clipped median plus the colour-aware margins above.
 - Shutter absolute tolerance per type: `2 × max(4σ-clipped |SEXPTIME − REXPTIME|) + 0.2 s`, with the
   relative tolerance fixed at 10 %. The 0.30 s overrun of the 2026-05-02 LDLS flat was clipped as an
   outlier, which is why that frame fails its own type's 0.252 s tolerance (§6.1).
 
-Self-check on the baselines themselves: 2.7 % of normal detector-frames sit outside their
-edge-background band (WARN-level drift), none breach a FAIL cap.
+Self-check on the baselines themselves: 0.75 % of normal detector-frames (25 of 3344) sit outside
+their edge-background band (WARN-level drift); the held-out June-4 dark trips the DARK/SLOW
+structure caps on 2.B.Green (row 6.7 vs 2.19, column 13.3 vs 2.0, i.e. 6.6 × the cap).
 
 Pipeline: `scripts/sort_baselines.py` → `scripts/extract_stats.py` → `scripts/aggregate_thresholds.py`
 (writes `llamas_checks/baselines/qa_thresholds_derived.json` and `qa_tracking_baselines.csv`) →
@@ -191,6 +232,8 @@ All runs: `llamas-checks <file> -v --report <out>.json`, 2026-09-22. Paths:
 - **BASE** = `/Users/slh/Library/CloudStorage/Box-Box/slhughes/LLAMAS_analysis/QA_baselines`
 - **COMM** = `/Users/slh/Library/CloudStorage/Box-Box/slhughes/Llamas_Commissioning_Data/ut20260710_11`
 - **WARM** = `/Users/slh/Downloads/20260505_06-selected` (the 2026-05-06 warm-camera incident night)
+- **S06** = `/Users/slh/Library/CloudStorage/Box-Box/slhughes/Llamas_Commissioning_Data/20260906_07_cals`
+- **S07** = `/Users/slh/Library/CloudStorage/Box-Box/slhughes/Llamas_Commissioning_Data/20260907_08`
 
 Every frame below except the CAL0 ones has two placeholder cameras, `1.A.Blue` and `4.A.Blue`
 (22 live detectors). The CAL0 frames from the incident night have all 24 extensions as placeholders,
@@ -215,34 +258,34 @@ overhead is what the absolute tolerance is for; the 10 % rule alone would fail e
 
 ### 6.2 Odd detector structure → FAIL (exit 2)
 
-Row/column banding above the per-detector heavy-tail cap. On a uniform frame (bias, dark) the caps
-are near the 2.0 ADU floor; on illuminated frames they are 1.5 × the worst normal frame.
+Row/column banding measured with the 2 %-trimmed-mean profile. On a uniform frame (bias, dark) the
+WARN caps are near the 2.0 ADU floor and the FAIL tier is 4 × the cap; on fixed-lamp illuminated
+frames (LDLS, ThAr) the heavy-tail cap (1.5 × the worst normal frame) is itself the FAIL.
 
-**Dark with column structure on two green detectors** — `BASE/Darks/LLAMAS_2026-06-04_20-36-33.1_CAL22_mef.fits`
+**Dark with periodic column bars on 2.B.Green** — `BASE/Darks/LLAMAS_2026-06-04_20-36-33.1_CAL22_mef.fits`
 (DARK, SLOW, 600 s; shutter nominal 600 → 600.002 s). Held out of the threshold derivation.
 
-| detector | rule | measured | cap | effect |
+| detector | rule | measured | limit | effect |
 |---|---|---|---|---|
-| 2.B.Green | `column_structure` | 13.15 | 2.0 | **FAIL** |
-| 2.B.Green | `row_structure` | 6.47 | 2.30 | **FAIL** |
-| 1.B.Green | `column_structure` | 4.11 | 2.0 | **FAIL** |
-| 2.B.Green | `frame_noise_rms` | 52.6 | 33.8 | WARN |
-| 1.B.Green | `frame_noise_rms` | 76.6 | 39.8 | WARN |
+| 2.B.Green | `column_structure_gross` | 13.28 | 8.0 (4 × 2.0) | **FAIL** |
+| 2.B.Green | `column_structure` | 13.28 | 2.0 | WARN |
+| 2.B.Green | `row_structure` | 6.68 | 2.19 | WARN |
 
-The other 20 live detectors pass all 133 evaluated checks. Result: `FAIL: 3 fail check(s)`, exit 2.
+Result: `FAIL: 1 fail check(s): column_structure_gross@2.B.Green`, exit 2. The 1.B.Green "column
+structure" that the plain-mean metric also flagged on this frame (4.11 vs 2.0) was hot pixels: with
+the trimmed profile it measures 0.14 and passes, which is the intended behaviour.
 
 **Commissioning ThAr arcs with banding on every camera and red blooming** — two consecutive frames:
 
-| frame | column FAIL | row FAIL | other |
-|---|---|---|---|
-| `COMM/LLAMAS_2026-07-10_20-22-43.7_CAL22_mef.fits` (ARC_THAR, FAST, 0.07 s) | 22 / 22 detectors, 1.8–2.3 × cap (e.g. 1.A.Green 85.6 vs 40.7; 3.B.Blue 173.9 vs 78.6; 1.B.Red 8527 vs 4713) | 21 / 22 (e.g. 4.A.Green 82.8 vs 29.8; 3.B.Red 2626 vs 879) | saturation WARN on all 8 reds (0.015–0.033 vs caps 0.010–0.021) |
-| `COMM/LLAMAS_2026-07-10_20-22-58.8_CAL22_mef.fits` (ARC_THAR, FAST) | 22 / 22, 1.0–3.1 × cap (3.A.Blue 176 vs 57.7; 2.A.Blue 182 vs 62.0; 1.A.Red 3293 vs 3263) | 15 / 22 | saturation WARN on all 8 reds (0.029–0.072); edge-background WARN on all 8 reds |
+| frame | column FAIL | row FAIL | excess over cap | other |
+|---|---|---|---|---|
+| `COMM/LLAMAS_2026-07-10_20-22-43.7_CAL22_mef.fits` (ARC_THAR, FAST, 0.07 s) | 22 / 22 detectors (e.g. 1.A.Green 79.0 vs 34.3; 3.B.Blue 165.7 vs 69.4; 1.B.Red 8514 vs 3569) | 21 / 22 | 2.2–12.6 × | edge-background WARN on 4.A.Red, saturation WARN on the reds |
+| `COMM/LLAMAS_2026-07-10_20-22-58.8_CAL22_mef.fits` (ARC_THAR, FAST) | 22 / 22 (1.A.Green 99.8; 3.B.Blue 204.2; 1.B.Red 7382) | 21 / 22 | 1.3–5.4 × | edge-background WARN on all 8 reds, saturation WARN on the reds |
 
-Result for both: **FAIL**, exit 2 (43 and 37 FAIL checks respectively).
+Result for both: **FAIL**, exit 2 (43 FAIL checks each).
 
 Counter-example, same sequence, 15 s earlier: `COMM/LLAMAS_2026-07-10_20-22-28.7_CAL22_mef.fits`
-passes 89 / 89 evaluated checks (exit 0); its structure sits at ≤ 0.67 × cap on every detector. The
-16 normal commissioning arcs of that night all pass; only these two frames fail.
+passes 111 / 111 evaluated checks (exit 0). The 26 ThAr arcs of 2026-09-06/07 all pass as well.
 
 ### 6.3 Camera warming → WARN (exit 1)
 
@@ -274,17 +317,55 @@ cannot be reshaped to 2048 × 2048.
 
 Neither is a pass. Re-copy or re-take the frame.
 
-### 6.5 Frames that must NOT fire (regression guards)
+### 6.5 Saturated / light-flooded flats → FAIL (exit 2) — `edge_saturated`
+
+The unilluminated bottom stripe (y 2–28, x 100–1948) of a detector never exceeds ~5000 ADU on a
+normal frame of any type, including the longer LDLS exposures that rail the red *fibres*. A
+stripe median above 63000 ADU means light is flooding pixels no fibre illuminates.
+
+| frame | type / mode / REXPTIME | `edge_saturated` FAIL on | other | result |
+|---|---|---|---|---|
+| `S07/LLAMAS_2026-09-07_18-17-12.8_CAL22_mef.fits` | LDLS_FLAT, FAST, 0.07 s | 18 detectors (every live one except 1.A.Red 59028, 1.B.Blue 8680, 2.B.Green 62398, 4.A.Green 62678) | edge-background WARN on all 22, blue saturation 0.68–0.76 | **FAIL**, exit 2 (was WARN) |
+| `S07/LLAMAS_2026-09-07_18-18-55.0_CAL22_mef.fits` | LDLS_FLAT, FAST, 0.3 s | 1.B.Red, 2.A.Red, 2.B.Red, 3.B.Red, 4.A.Red, 4.B.Red (64053–65535) | 13 edge-background WARNs; greens railed, blues 2–4 × a normal 0.3 s step | **FAIL**, exit 2 (was WARN) |
+| `BASE/lamp_flats/LLAMAS_2026-06-30_19-33-58.0_CAL22_mef.fits` | LDLS_FLAT, FAST, 0.15 s (SEXPTIME 0.246 s, inside the shutter tolerance) | 1.B.Red, 2.A.Red, 2.B.Red, 3.B.Red | shutter overrun of 64 % | **FAIL**, exit 2 (was PASS; newly detected baseline anomaly, left in the set because the level bands are MAD-robust) |
+
+`S07/LLAMAS_2026-09-07_18-16-59.5_CAL22_mef.fits` (the frame before 18-17-12.8) is railed the same
+way and also fails; `18-17-27.1` (0.07 s, 15 s later) is a normal flat and passes, so the flooding
+was intermittent within the sequence.
+
+Counter-examples: the normal 0.07 s flat `S06/LLAMAS_2026-09-06_18-52-19.2` (red medians 15–26k,
+stripes at 1000–2300 ADU) and the normal 0.3 s flat `S06/…18-53-43.1` (reds railed, stripes ≤ 4900)
+both pass 111 / 111.
+
+### 6.6 Benign frames that used to FAIL (regression guards for the 2026-09 revision)
+
+Every one of these was a FAIL under the plain-mean structure / plain-std rms rules; none is a
+defect. Values are the new metric against the new cap.
+
+| frame | type / mode | old FAIL reason | now | why |
+|---|---|---|---|---|
+| `S06/LLAMAS_2026-09-06_19-14-52.1_CAL22_mef.fits` (and 33 of the other 34 FAST biases of 09-06/09-07) | BIAS, FAST | `row_structure` 4.A.Red 382.5 vs 259.8 | **WARN**, exit 1: `row_structure` 387.8 vs 202.4, `column_structure` 739.0 vs 706.5 | 4.A.Red's variable left-edge glow ran 1.4–2.1 × the April–June cap on those nights; the 4 × FAIL tier (809.7 / 2825.8) is far away. Adding a September epoch to the baselines would widen this cap (§9) |
+| `S06/LLAMAS_2026-09-06_20-33-17.7_CAL22_mef.fits` | BIAS, FAST | 2.A.Red row 6.1 / col 11.2 vs 2.0, rms 159 vs 18 | **WARN**, exit 1: only the 4.A.Red row structure (317.4 vs 202.4) | ~20 saturated pixels in one column of 2.A.Red; trimmed profile 0.36, robust rms unaffected |
+| `S06/LLAMAS_2026-09-06_19-08-53.8_CAL22_mef.fits` | BIAS, SLOW | 3.A.Red row 3.4 / col 5.6 vs 2.0, rms 106 vs 25 | **PASS** 221 / 221 | hot pixels (trimmed column profile 0.06) |
+| `S07/LLAMAS_2026-09-07_18-28-08.0_CAL22_mef.fits` | BIAS, SLOW | 3.B.Red row 3.0 / col 3.3 vs 2.0, rms 79 vs 22 | **PASS** 221 / 221 | hot pixels |
+| `S06/LLAMAS_2026-09-06_19-28-14.2_CAL22_mef.fits` | DARK, SLOW | 2.B.Green row 2.37 / col 4.57, rms 86 vs 34 | **PASS** 221 / 221 | hot pixels on top of a ~5 ADU glow gradient (trimmed column profile 0.11) |
+| `S07/LLAMAS_2026-09-07_19-15-34.6_CAL22_mef.fits` | DARK, SLOW | 5 structure FAILs on 1.A.Red / 2.A.Green / 4.A.Red, rms 85–112 | **PASS** 221 / 221 | hot pixels and cosmic rays after 600 s |
+| `S06/LLAMAS_2026-09-06_22-22-03.4_CAL22_mef.fits` ("good blue" in the observer log) | SKY_FLAT, SLOW | 4 structure FAILs at 1.00–1.04 × cap | **WARN**, exit 1: 14 edge-background, 9 saturation, 5 structure WARNs | twilight brighter than the baseline set; structure on sky flats is WARN |
+| `S06/LLAMAS_2026-09-06_22-19-43.5_CAL22_mef.fits` ("saturated" in the observer log) | SKY_FLAT, FAST | 13 structure FAILs | **WARN**, exit 1: 42 WARNs (edge background, saturation 0.04–0.27, structure) | a too-bright twilight is a WARN for the observer, not a rejected frame |
+
+### 6.7 Frames that must NOT fire (regression guards)
 
 | frame | type | result | why it matters |
 |---|---|---|---|
 | `BASE/Bias/LLAMAS_2026-04-07_19-23-19.3_CAL22_mef.fits` | BIAS, FAST | WARN, exit 1: `edge_background_level` and `frame_level_median` on 3.A.Green (803 vs ≤ 802), 4.A.Green (889 vs ≤ 881.8), 4.B.Green (822 vs ≤ 819.7) | benign level drift a few ADU over band; exactly the WARN-level monitoring the bands are for, never a FAIL |
-| `BASE/Darks/LLAMAS_2026-04-07_21-13-34.9_CAL22_mef.fits` | DARK, SLOW | PASS 133 / 133, exit 0 | normal dark against the structure caps that fail the June dark |
-| `BASE/Arcs/LLAMAS_2026-04-07_20-40-49.6_CAL22_mef.fits` | ARC_THAR, FAST | PASS 155 / 155, exit 0 | normal red arc saturation (WARN-tier cap) passes; structure well under cap |
-| `BASE/lamp_flats/LLAMAS_2026-04-07_20-37-07.4_CAL22_mef.fits` | LDLS_FLAT, FAST | PASS 155 / 155, exit 0 | real fibre structure passes the heavy-tail caps |
-| `BASE/twilight_flats/LLAMAS_2026-05-02_22-15-33.4_CAL22_mef.fits` | SKY_FLAT, FAST | PASS 155 / 155, exit 0 | |
-| `COMM/LLAMAS_2026-07-10_20-22-28.7_CAL22_mef.fits` | ARC_THAR, FAST | PASS 89 / 89, exit 0 | normal frame bracketing the two odd arcs |
-| `COMM/LLAMAS_2026-07-11_05-05-22.4_SCI22_mef.fits` (LTT7987, 1 s) | SCIENCE, FAST | PASS 89 / 89, exit 0 | 4.A.Red carries fixed horizontal banding; the gradient-rate check ignores it by design (banding is not a time-accruing glow), and `CCDTEMP1` (no underscore) is read correctly: all cameras healthy |
+| `BASE/Darks/LLAMAS_2026-04-07_21-13-34.9_CAL22_mef.fits` | DARK, SLOW | PASS 221 / 221, exit 0 | normal dark against the structure caps that fail the June dark |
+| `BASE/Arcs/LLAMAS_2026-04-07_20-40-49.6_CAL22_mef.fits` | ARC_THAR, FAST | PASS 177 / 177, exit 0 | normal red arc saturation (WARN-tier cap) passes; structure well under cap |
+| `BASE/lamp_flats/LLAMAS_2026-04-07_20-37-07.4_CAL22_mef.fits` | LDLS_FLAT, FAST | PASS 177 / 177, exit 0 | real fibre structure passes the heavy-tail caps |
+| `BASE/twilight_flats/LLAMAS_2026-05-02_22-15-33.4_CAL22_mef.fits` | SKY_FLAT, FAST | PASS 177 / 177, exit 0 | |
+| `S06/LLAMAS_2026-09-06_18-21-00.7_CAL22_mef.fits` | BIAS, FAST | PASS 221 / 221, exit 0 | FAST bias with the usual 4.A.Red pattern at a low amplitude |
+| `S06/LLAMAS_2026-09-06_18-53-43.1_CAL22_mef.fits` | LDLS_FLAT, FAST, 0.3 s | PASS 111 / 111, exit 0 | reds railed by a normal blue-channel exposure, stripes unsaturated: must not trip `edge_saturated` |
+| `COMM/LLAMAS_2026-07-10_20-22-28.7_CAL22_mef.fits` | ARC_THAR, FAST | PASS 111 / 111, exit 0 | normal frame bracketing the two odd arcs |
+| `COMM/LLAMAS_2026-07-11_05-05-22.4_SCI22_mef.fits` (LTT7987, 1 s) | SCIENCE, FAST | PASS 111 / 111, exit 0 | 4.A.Red carries fixed horizontal banding; the gradient-rate check ignores it by design (banding is not a time-accruing glow), and `CCDTEMP1` (no underscore) is read correctly: all cameras healthy |
 | `WARM/LLAMAS_2026-05-06_05-56-25.8_CAL0_mef.fits` | BIAS, SLOW | PASS, exit 0 | bias from the incident night with a nominal shutter |
 
 Skipped-check counts in the reports come from absent header keywords, not from failures: the two
@@ -292,30 +373,74 @@ Skipped-check counts in the reports come from absent header keywords, not from f
 so their 66–72 temperature checks are SKIPPED; the 20-22-58.8 arc and the 2026-07-11 frames do carry
 them and are evaluated.
 
-### 6.6 Full-baseline sweep
+### 6.8 Full-baseline sweep
 
 `scripts/batch_tally.py` runs the cal config over every frame in the five baseline folders
 (154 files, in-process, no sidecars).
 
-Re-run 2026-09-22 with the shipped package; the counts are identical to the July-2026 campaign.
+Re-run 2026-09-22 with the revised rules (trimmed-mean structure, MAD rms, WARN/FAIL tiers,
+`edge_saturated`). The only change against the July-2026 campaign is the 2026-06-30 LDLS flat
+with railed red edge stripes moving from WARN to FAIL (§6.5).
 
 | folder | n | PASS | WARN | FAIL |
 |---|---|---|---|---|
 | Bias | 48 | 46 | 2 | 0 |
 | Darks | 7 | 6 | 0 | 1 |
 | Arcs | 39 | 39 | 0 | 0 |
-| lamp_flats | 36 | 30 | 5 | 1 |
+| lamp_flats | 36 | 30 | 4 | 2 |
 | twilight_flats | 24 | 18 | 6 | 0 |
-| **total** | **154** | **139** | **13** | **2** |
+| **total** | **154** | **139** | **12** | **3** |
 
-The only two FAILs are real: the 2026-05-02 LDLS flat with the shutter overrun (§6.1) and the
-held-out 2026-06-04 dark (§6.2). No normal baseline frame fails; the WARNs are per-detector
-level/background drift of the kind shown for the 2026-04-07 bias.
+The three FAILs are real: the 2026-05-02 LDLS flat with the shutter overrun (§6.1), the held-out
+2026-06-04 dark (§6.2, via `column_structure_gross`) and the 2026-06-30 LDLS flat with saturated
+edge stripes (§6.5). No normal baseline frame fails; the WARNs are per-detector level/background
+drift of the kind shown for the 2026-04-07 bias.
+
+### 6.9 September 2026 commissioning nights (the nights that motivated the revision)
+
+In-process sweep (no sidecars) of every raw frame in `S06` (79) and `S07` (121; the 14
+`*_mef_white.fits` white-light products in that folder are not raw frames and are skipped as
+unreadable). Before the revision the observer's log recorded 22 of 24 FAST biases, 1 SLOW bias,
+1 dark and 4 twilight flats as FAIL on 09-06 alone, and the two railed LDLS flats as WARN.
+
+| type / mode | n | PASS | WARN | FAIL | notes |
+|---|---|---|---|---|---|
+| BIAS FAST | 35 | 1 | 34 | 0 | every WARN is 4.A.Red `row_structure` (1.4–2.1 × cap); 11 also `column_structure` (≤ 1.12 ×) |
+| BIAS SLOW | 22 | 22 | 0 | 0 | the two hot-pixel frames (§6.6) now pass |
+| DARK SLOW | 7 | 7 | 0 | 0 | the two glow darks (§6.6) now pass |
+| ARC FAST / SLOW | 18 / 6 | 24 | 0 | 0 | |
+| LDLS FAST | 28 | 21 | 4 | 3 | FAILs: `18-16-59.5`, `18-17-12.8`, `18-18-55.0`, all `edge_saturated` (§6.5); WARNs: 1.B.Red edge band on the 0.3 s step |
+| SKY FAST / SLOW | 11 / 19 | 16 | 14 | 0 | bright twilights: edge band, saturation and structure WARNs |
+| SCIENCE FAST / SLOW | 40 | 40 | 0 | 0 | |
+
+No frame on either night FAILs for a reason other than the light-flooded flats.
 
 ## 7. Automated test inventory
 
-68 pytest tests, all on synthetic MEF files built in a temporary directory (no instrument data
+88 pytest tests, all on synthetic MEF files built in a temporary directory (no instrument data
 needed). Run with `pytest` from the repo root.
+
+### `tests/test_severity_tiers.py` — robust metrics and WARN/FAIL tiers (20)
+
+| test | asserts |
+|---|---|
+| `test_config_is_valid`, `test_validator_accepts_robust_std` | the tier test config validates; `robust_std` is a known metric type |
+| `test_trimmed_structure_ignores_hot_column_fragment` | 4 railed pixels in one 200-row column leave row/column structure < 0.1 |
+| `test_trimmed_structure_measures_full_column_bar` | a 200-column full-height +10 ADU bar gives column structure > 2 |
+| `test_trimmed_structure_measures_row_banding` | alternate rows +3 ADU → row structure 1.5 |
+| `test_robust_std_is_read_noise_and_blind_to_hot_pixels` | robust rms = 1.4826 × MAD, unchanged by hot pixels; the plain std is not |
+| `test_structure_above_cap_is_warn_not_fail` | 1.5 × cap → `row_structure` WARN, `row_structure_gross` passes, overall WARN |
+| `test_gross_structure_fails` | 5 × cap → `row_structure_gross` FAIL, overall FAIL |
+| `test_hot_pixel_cluster_bias_passes` | a bias with a saturated hot-pixel cluster is PASS |
+| `test_modest_saturation_is_warn_only` | 1e-3 saturated → `saturation_fraction` WARN, `saturation_gross` passes |
+| `test_gross_saturation_fails` | 2 % saturated → `saturation_gross` FAIL |
+| `test_railed_edge_stripe_fails` | bottom stripe at 65535 → `edge_saturated` FAIL |
+| `test_bright_but_unsaturated_edge_stripe_passes_edge_rule` | stripe +4000 ADU passes `edge_saturated` |
+| `test_shipped_uniform_frames_have_two_tier_structure` (×2) | shipped BIAS/DARK: structure WARN + `*_gross` FAIL, saturation WARN + `saturation_gross` FAIL at 0.01 |
+| `test_shipped_gross_caps_are_four_times_warn_caps` (×2) | every `row_fail_max`/`col_fail_max` in the shipped tables is 4 × the WARN cap |
+| `test_shipped_illuminated_structure_severities` | shipped SKY structure WARN, LDLS/ARC FAIL, no gross tier on illuminated sets |
+| `test_every_shipped_rule_set_has_edge_saturated_fail` | all six rule sets carry `edge_saturated` FAIL at 63000 ADU on `bottom_stripe` |
+| `test_shipped_rms_metric_is_robust` | the shipped `rms` metric is `robust_std` |
 
 ### `tests/test_qa_engine_header.py` — engine rules and validator (27)
 
@@ -399,7 +524,7 @@ needed). Run with `pytest` from the repo root.
 
 ### Regression drivers on real data (not part of `pytest`)
 
-- `scripts/run_qa_tests.py` — the 15-case matrix of §6 through the engine CLI (writes sidecars
+- `scripts/run_qa_tests.py` — the 23-case matrix of §6 through the engine CLI (writes sidecars
   beside the inputs on purpose; run it on copies). Needs `LLAMAS_QA_BASELINES`,
   `LLAMAS_QA_WARM_DIR`, `LLAMAS_QA_COMMISSIONING_DIR`.
 - `scripts/batch_tally.py` — the 154-file baseline sweep of §6.6, in-process, no sidecars.
@@ -407,11 +532,13 @@ needed). Run with `pytest` from the repo root.
 ## 8. Regenerating
 
 ```bash
-pytest                                                    # 68 synthetic tests
+pytest                                                    # 88 synthetic tests
 python scripts/gen_thresholds_doc.py                      # refresh QA_THRESHOLDS_TABLES.md from the YAMLs
+python scripts/gen_examples_doc.py                        # refresh QA_EXAMPLES.md + docs/images/ (all five data roots)
 python scripts/batch_tally.py --baselines-root "$LLAMAS_QA_BASELINES" --out batch_tally.json
-python scripts/run_qa_tests.py                            # 15-case matrix (copies of the frames recommended)
+python scripts/run_qa_tests.py                            # 23-case matrix (copies of the frames recommended)
 ```
 
-After changing thresholds (`aggregate_thresholds.py` → `gen_configs.py` → `llamas-checks-validate`),
-re-run the three commands above and update §6 with any changed measured-vs-cap numbers.
+After changing metrics or thresholds (`extract_stats.py` → `aggregate_thresholds.py` → `gen_configs.py`
+→ `llamas-checks-validate`), re-run the commands above and update §6 with any changed
+measured-vs-cap numbers.
