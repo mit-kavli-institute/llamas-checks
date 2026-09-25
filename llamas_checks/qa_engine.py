@@ -832,6 +832,18 @@ def validate_config(config: dict[str, Any], config_path: Path) -> None:
         raise QAEngineError(f"invalid QA configuration: {config_path}\n{details}")
  
  
+def report_path_for(fits_path: Path, directory: Path | None = None) -> Path:
+    """Report file for a frame: ``<frame>.qa.json`` beside it, or inside ``directory``.
+
+    Shared by ``llamas-checks-engine`` (sidecars next to the frame) and
+    ``llamas-checks --report-dir`` so one frame has one report name everywhere,
+    e.g. ``LLAMAS_2026-09-07_18-17-12.8_CAL22_mef.fits`` ->
+    ``LLAMAS_2026-09-07_18-17-12.8_CAL22_mef.qa.json``.
+    """
+    name = fits_path.with_suffix(".qa.json").name
+    return (directory if directory is not None else fits_path.parent) / name
+
+
 def write_report(report: dict[str, Any], output_path: Path | None) -> None:
     text = json.dumps(report, indent=2, sort_keys=False)
     if output_path is None:
@@ -987,11 +999,11 @@ def main() -> int:
                 )
                 verdict = report["overall_verdict"]
  
-                out_path = input_path.with_suffix(".qa.json")
+                out_path = report_path_for(input_path)
                 write_report(report, out_path)
             except Exception as exc:
                 verdict = "ERROR"
-                out_path = input_path.with_suffix(".qa.json")
+                out_path = report_path_for(input_path)
  
                 error_report = {
                     "fits_file": str(input_path),
@@ -1023,7 +1035,7 @@ def main() -> int:
  
             for item in report["files"]:
                 fits_path = Path(item["fits_file"])
-                out_path = fits_path.with_suffix(".qa.json")
+                out_path = report_path_for(fits_path)
  
                 if item["status"] == "OK":
                     write_report(item["report"], out_path)

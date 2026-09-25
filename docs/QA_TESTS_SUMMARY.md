@@ -17,6 +17,11 @@ depend on `llamas-pyjamas`.
 > sky flats is WARN; every rule set gained `edge_saturated` (unilluminated stripe at the ADC
 > ceiling → FAIL), which is what catches railed LDLS flats. Where this document says structure
 > is "FAIL on bias/dark", read the catalogue for the current tiering.
+>
+> **2026-09-23/25 (same branch).** `llamas-checks --report` now names the report after the frame
+> (`<frame>.qa.json`, like the engine sidecars): bare `--report` → current directory, `--report DIR`
+> or `--report-dir DIR` → that directory, `--report out.json` → explicit file. A report is written
+> only for warn/fail unless `--report-all` is given. `check_image` returns `report_path`.
 
 | Config | Applies to | Rule sets |
 |---|---|---|
@@ -44,15 +49,17 @@ JSON). It runs the same engine on **one** image but **auto-selects the config fr
 pass `--config`:
 
 ```bash
-# auto-selects cal vs science by PRODCATG:
-llamas-checks /path/to/LLAMAS_..._mef.fits --report out.json
+# auto-selects cal vs science by PRODCATG; ./<frame>.qa.json written only if warn/fail:
+llamas-checks /path/to/LLAMAS_..._mef.fits --report
 # explicit override still available:
 llamas-checks /path/to/file.fits --qa-yaml /path/to/qa_config_cal.yaml
 ```
 
-It writes **no** `.qa.json` next to the input; pass `--report out.json` to save the report (which
-carries `status`, `overall_verdict`, `summary`, the `structure` block, and the full per-rule
-`results`, e.g. which cameras tripped `ccd_temperature_*` / structure). Its **exit-code convention
+It writes **no** `.qa.json` next to the input; pass `--report` (report named after the frame, in
+the current directory or the directory you give it) to save the report (which carries `status`, `overall_verdict`, `summary`,
+the `structure` block, `report_path`, and the full per-rule `results`, e.g. which cameras tripped
+`ccd_temperature_*` / structure). The report is written only when the frame warns or fails;
+`--report-all` also writes passing frames. Its **exit-code convention
 differs** from `llamas-checks-engine`: **`0 = pass, 1 = warn, 2 = fail, 3 = system error`**. If
 `PRODCATG` is missing/unrecognised it falls back to the base `qa_config.yaml`.
 

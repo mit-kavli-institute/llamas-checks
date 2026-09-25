@@ -30,14 +30,19 @@ Contents
 
 ```bash
 llamas-checks /path/to/LLAMAS_2026-04-07_19-23-19.3_CAL22_mef.fits -v          # one frame, verdict + fired rules
-llamas-checks /path/to/frame.fits --report /path/to/frame_qa.json               # quiet; full detail in the JSON
+llamas-checks /path/to/frame.fits --report                                      # quiet; ./frame.qa.json written only if warn/fail
+llamas-checks /path/to/frame.fits --report /path/to/reports                     # same, into an existing directory
 python -m llamas_checks /path/to/frame.fits -v                                  # same tool, module form
 ```
 
 The frame type is read from the primary-header `PRODCATG`: `CAL.*` frames get
 `qa_config_cal.yaml`, `SCI.*` frames get `qa_config_science.yaml`; an unrecognised or missing
 `PRODCATG` falls back to the base `qa_config.yaml` and is reported as unidentified. Nothing is
-written next to the input; only `--report` writes a file.
+written next to the input; only `--report` / `--report-dir` write a file, and only when the frame
+**warns or fails** (`--report-all` also writes passing frames). The file is named after the frame,
+`<frame>.qa.json`, the same name the engine gives its sidecars: bare `--report` puts it in the
+current directory, `--report DIR` / `--report-dir DIR` in a directory, and `--report out.json`
+names an explicit file.
 
 | exit code | meaning | printed without `-v` |
 |---|---|---|
@@ -227,7 +232,8 @@ rendered from those files by `scripts/gen_thresholds_doc.py`.
 
 ## 6. Bad-image test cases (real frames)
 
-All runs: `llamas-checks <file> -v --report <out>.json`, 2026-09-22. Paths:
+All runs: `llamas-checks <file> -v --report <out>.json`, 2026-09-22 (before the report gate;
+today the passing cases would write no file without `--report-all`). Paths:
 
 - **BASE** = `/Users/slh/Library/CloudStorage/Box-Box/slhughes/LLAMAS_analysis/QA_baselines`
 - **COMM** = `/Users/slh/Library/CloudStorage/Box-Box/slhughes/Llamas_Commissioning_Data/ut20260710_11`
@@ -417,7 +423,7 @@ No frame on either night FAILs for a reason other than the light-flooded flats.
 
 ## 7. Automated test inventory
 
-88 pytest tests, all on synthetic MEF files built in a temporary directory (no instrument data
+99 pytest tests, all on synthetic MEF files built in a temporary directory (no instrument data
 needed). Run with `pytest` from the repo root.
 
 ### `tests/test_severity_tiers.py` — robust metrics and WARN/FAIL tiers (20)
@@ -498,12 +504,23 @@ needed). Run with `pytest` from the repo root.
 | `test_check_image_reports_placeholder_extensions` | placeholder detector appears in `structure.placeholder_extensions` |
 | `test_check_image_structure_present_with_report_and_fail` | structure block present on the early "unidentified type" fail path |
 
-### `tests/test_cli.py` — command-line contract (22)
+### `tests/test_cli.py` — command-line contract (33)
 
 | test | asserts |
 |---|---|
-| `test_module_entry_quiet_and_report` | `python -m llamas_checks` is silent on 0/1/2 and the report JSON has `status`, `structure`, `report` |
-| `test_no_sidecar_written_next_to_input` | no `.qa.json` appears beside the input |
+| `test_module_entry_quiet_and_report` | `python -m llamas_checks` is silent on 0/1/2 and the report JSON has `status`, `structure`, `report`, `report_path` |
+| `test_no_sidecar_written_next_to_input` | no `.qa.json` appears beside the input, with `--report` or `--report-dir` elsewhere |
+| `test_pass_writes_no_report_by_default` | passing frame + `--report PATH` → exit 0, no file |
+| `test_pass_writes_report_with_report_all` | `--report-all` writes the passing report; `-v` prints `report: <path>` |
+| `test_warn_report_dir_names_report_after_frame` | warn + `--report-dir` → `DIR/LLAMAS_…_mef.qa.json`, same name as the engine sidecar |
+| `test_bare_report_names_after_frame_in_cwd` | bare `--report` → `./LLAMAS_…_mef.qa.json`, nothing beside the frame |
+| `test_report_pointed_at_directory_names_after_frame` | `--report <existing dir>` → `<dir>/<frame>.qa.json` |
+| `test_report_refuses_fits_path` | `--report something.fits` → exit 3, the FITS file is untouched |
+| `test_error_verdict_written_with_report_dir` | ERROR verdict (status fail) is written under `--report-dir` |
+| `test_pass_with_report_dir_creates_nothing` | a pass does not even create the report directory |
+| `test_report_and_report_dir_are_exclusive` | both options → argparse error; both arguments → `QAEngineError` |
+| `test_check_image_report_path_key` | `result["report_path"]` is `None` on pass and the derived path on warn |
+| `test_report_path_for_matches_engine_sidecar_name` | `report_path_for` with and without a directory |
 | `test_shutter_fault_exits_fail_and_verbose_reports` | shutter fault → exit 2; `-v` prints the rule to stderr |
 | `test_missing_input_is_system_error` | missing file → exit 3, one stderr line starting `system error` |
 | `test_shipped_configs_validate` ×3 | `llamas-checks-validate` exits 0 on cal, science and base YAML |
@@ -516,7 +533,7 @@ needed). Run with `pytest` from the repo root.
 | `test_engine_wrong_path_to_shipped_name_errors` | a wrong directory path is not silently replaced → exit 2 |
 | `test_error_verdict_is_fail_with_message_and_report` | `check_image` maps ERROR to status fail and still writes the report |
 | `test_error_verdict_through_cli_exits_2_not_3` | same through the CLI → exit 2 |
-| `test_calib_root_default_suite_selects_prodcatg_config` | `--calib-root` with the default suite picks the config by PRODCATG |
+| `test_calib_root_default_suite_selects_prodcatg_config` | `--calib-root` with the default suite picks the config by PRODCATG (`--report-all` to capture the passing report) |
 | `test_suite_name_selects_root_suite_yaml` | `--suite name` selects `<root>/name.yaml` |
 | `test_verbose_structure_line_lists_placeholder` | `-v` prints `structure: … placeholder: 1.A.Green` |
 | `test_multiline_system_error_prints_one_line` ×2 | invalid config / YAML syntax error → exactly one stderr line, exit 3 |
@@ -532,7 +549,7 @@ needed). Run with `pytest` from the repo root.
 ## 8. Regenerating
 
 ```bash
-pytest                                                    # 88 synthetic tests
+pytest                                                    # 99 synthetic tests
 python scripts/gen_thresholds_doc.py                      # refresh QA_THRESHOLDS_TABLES.md from the YAMLs
 python scripts/gen_examples_doc.py                        # refresh QA_EXAMPLES.md + docs/images/ (all five data roots)
 python scripts/batch_tally.py --baselines-root "$LLAMAS_QA_BASELINES" --out batch_tally.json
