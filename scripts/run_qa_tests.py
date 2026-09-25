@@ -16,6 +16,8 @@ The three data roots come from arguments or environment variables:
   --baselines-root      LLAMAS_QA_BASELINES          (QA_baselines: Bias/ Darks/ ... copies/)
   --warm-dir            LLAMAS_QA_WARM_DIR           (2026-05-06 warm-incident frames)
   --commissioning-dir   LLAMAS_QA_COMMISSIONING_DIR  (ut20260710_11 commissioning frames)
+  --sept06-dir          LLAMAS_QA_SEPT06_DIR         (Llamas_Commissioning_Data/20260906_07_cals)
+  --sept07-dir          LLAMAS_QA_SEPT07_DIR         (Llamas_Commissioning_Data/20260907_08)
 Cases whose root is unset, or whose file is absent, are reported as MISSING FILE
 and skipped.
 """
@@ -61,6 +63,15 @@ CASES = [
     ("WARM cal ARC (shutter)",   "FAIL", "warm", "LLAMAS_2026-05-06_05-50-23.7_CAL0_mef.fits",                     CAL),
     ("WARM cal BIAS (shutter ok)", "PASS", "warm", "LLAMAS_2026-05-06_05-56-25.8_CAL0_mef.fits",                   CAL),
     ("WARM cal BIAS (shutter)",  "FAIL", "warm", "LLAMAS_2026-05-06_05-56-30.7_CAL0_mef.fits",                     CAL),
+    # 2026-09 severity revision: benign biases/darks must not FAIL, railed flats must.
+    ("Sept FAST bias (4A.red banding)",   "PASS/WARN", "sept06", "LLAMAS_2026-09-06_19-14-52.1_CAL22_mef.fits", CAL),
+    ("Sept FAST bias (hot-pixel cluster)", "PASS/WARN", "sept06", "LLAMAS_2026-09-06_20-33-17.7_CAL22_mef.fits", CAL),
+    ("Sept SLOW bias (noisy 3A.red)",     "PASS/WARN", "sept06", "LLAMAS_2026-09-06_19-08-53.8_CAL22_mef.fits", CAL),
+    ("Sept dark (2B.green glow)",         "PASS/WARN", "sept06", "LLAMAS_2026-09-06_19-28-14.2_CAL22_mef.fits", CAL),
+    ("Sept dark (multi-detector glow)",   "PASS/WARN", "sept07", "LLAMAS_2026-09-07_19-15-34.6_CAL22_mef.fits", CAL),
+    ("Sept bright sky flat",              "PASS/WARN", "sept06", "LLAMAS_2026-09-06_22-22-03.4_CAL22_mef.fits", CAL),
+    ("RAILED LDLS flat 0.07 s",           "FAIL",      "sept07", "LLAMAS_2026-09-07_18-17-12.8_CAL22_mef.fits", CAL),
+    ("RAILED LDLS flat 0.3 s",            "FAIL",      "sept07", "LLAMAS_2026-09-07_18-18-55.0_CAL22_mef.fits", CAL),
 ]
 
 EXIT_MEANING = {0: "PASS/WARN", 1: "FAIL", 2: "ERROR"}
@@ -111,18 +122,22 @@ def summarize(rules):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run the 15-case engine test matrix and record exit code + fired rules per case.")
+        description="Run the 23-case engine test matrix and record exit code + fired rules per case.")
     parser.add_argument("--baselines-root", default=os.environ.get("LLAMAS_QA_BASELINES"),
                         help="QA_baselines root (default: $LLAMAS_QA_BASELINES)")
     parser.add_argument("--warm-dir", default=os.environ.get("LLAMAS_QA_WARM_DIR"),
                         help="2026-05-06 warm-incident frames (default: $LLAMAS_QA_WARM_DIR)")
     parser.add_argument("--commissioning-dir", default=os.environ.get("LLAMAS_QA_COMMISSIONING_DIR"),
                         help="ut20260710_11 commissioning frames (default: $LLAMAS_QA_COMMISSIONING_DIR)")
+    parser.add_argument("--sept06-dir", default=os.environ.get("LLAMAS_QA_SEPT06_DIR"),
+                        help="20260906_07_cals commissioning cals (default: $LLAMAS_QA_SEPT06_DIR)")
+    parser.add_argument("--sept07-dir", default=os.environ.get("LLAMAS_QA_SEPT07_DIR"),
+                        help="20260907_08 commissioning night (default: $LLAMAS_QA_SEPT07_DIR)")
     parser.add_argument("--out", default="qa_test_results.json",
                         help="output JSON path (default: ./qa_test_results.json)")
     args = parser.parse_args()
     roots = {"baselines": args.baselines_root, "warm": args.warm_dir,
-             "commissioning": args.commissioning_dir}
+             "commissioning": args.commissioning_dir, "sept06": args.sept06_dir, "sept07": args.sept07_dir}
 
     results = []
     print(f"{'CASE':22s} {'EXIT':4s} {'VERDICT':8s} {'PRODCATG':11s} FIRED RULES")

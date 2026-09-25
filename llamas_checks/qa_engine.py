@@ -51,6 +51,12 @@ FITS_SUFFIXES = (
     ".fts",
 )
 
+# Row/column structure profiles use a trimmed mean: the lowest and highest
+# STRUCTURE_TRIM_FRACTION of each row (column) are dropped before averaging, so a
+# hot-pixel cluster or cosmic-ray trail (< 2 % of a 2048-pixel line) cannot move
+# the profile, while banding, bars and glow gradients (which fill a line) still do.
+STRUCTURE_TRIM_FRACTION = 0.02
+
 # Constant-frame values that mark a software placeholder for a missing camera:
 # 1.0 in real frames, 0.0 from the pipeline validator (validate.create_placeholder_hdu).
 PLACEHOLDER_VALUES = (0.0, 1.0)
@@ -647,6 +653,13 @@ class QAEngine:
         if metric_type == "std":
             return float(np.std(finite_values))
 
+        if metric_type == "robust_std":
+            # Read-noise monitor: 1.4826 x MAD. A plain std on a 4-Mpix frame is
+            # dominated by a handful of hot/saturated pixels or a cosmic-ray
+            # cluster (20 railed pixels alone give std ~150 ADU); the MAD is not.
+            median = np.median(finite_values)
+            return float(1.4826 * np.median(np.abs(finite_values - median)))
+
         if metric_type == "min":
             return float(np.min(finite_values))
         
@@ -666,8 +679,13 @@ class QAEngine:
             return float(np.count_nonzero(finite_values > metric["threshold"]))
         
         if metric_type in ("row_structure", "column_structure"):
+            # Banding metric: std of the per-row (or per-column) TRIMMED means.
+            # Whole-row/column offsets, bars and glow gradients move the profile;
+            # isolated hot pixels, hot-column fragments and cosmic rays do not
+            # (a plain mean profile let a 20-pixel saturated cluster FAIL a bias;
+            # a median profile missed real bars confined to part of a column).
             axis = -1 if metric_type == "row_structure" else -2  # collapse cols / rows
-            profile = np.nanmean(values, axis=axis)
+            profile = trimmed_mean_profile(values, axis)
             profile = profile[np.isfinite(profile)]
             if profile.size == 0:
                 raise QAEngineError("structure metric has no finite rows/columns")
@@ -778,6 +796,20 @@ class QAEngine:
         }
  
  
+def trimmed_mean_profile(values: Any, axis: int, trim: float = STRUCTURE_TRIM_FRACTION) -> Any:
+    """Mean along ``axis`` after dropping the lowest/highest ``trim`` fraction of each line.
+
+    At least one pixel is trimmed from each end so the metric is defined for short
+    test frames; NaNs sort to the top end and are trimmed or ignored by nanmean.
+    """
+    ordered = np.sort(np.asarray(values, dtype=float), axis=axis)
+    n = ordered.shape[axis]
+    k = max(1, int(n * trim))
+    index = [slice(None)] * ordered.ndim
+    index[axis] = slice(k, n - k)
+    return np.nanmean(ordered[tuple(index)], axis=axis)
+
+
 def load_yaml(path: Path) -> dict[str, Any]:
     try:
         with path.open("r", encoding="utf-8") as handle:
@@ -800,6 +832,18 @@ def validate_config(config: dict[str, Any], config_path: Path) -> None:
         raise QAEngineError(f"invalid QA configuration: {config_path}\n{details}")
  
  
+def report_path_for(fits_path: Path, directory: Path | None = None) -> Path:
+    """Report file for a frame: ``<frame>.qa.json`` beside it, or inside ``directory``.
+
+    Shared by ``llamas-checks-engine`` (sidecars next to the frame) and
+    ``llamas-checks --report-dir`` so one frame has one report name everywhere,
+    e.g. ``LLAMAS_2026-09-07_18-17-12.8_CAL22_mef.fits`` ->
+    ``LLAMAS_2026-09-07_18-17-12.8_CAL22_mef.qa.json``.
+    """
+    name = fits_path.with_suffix(".qa.json").name
+    return (directory if directory is not None else fits_path.parent) / name
+
+
 def write_report(report: dict[str, Any], output_path: Path | None) -> None:
     text = json.dumps(report, indent=2, sort_keys=False)
     if output_path is None:
@@ -955,11 +999,11 @@ def main() -> int:
                 )
                 verdict = report["overall_verdict"]
  
-                out_path = input_path.with_suffix(".qa.json")
+                out_path = report_path_for(input_path)
                 write_report(report, out_path)
             except Exception as exc:
                 verdict = "ERROR"
-                out_path = input_path.with_suffix(".qa.json")
+                out_path = report_path_for(input_path)
  
                 error_report = {
                     "fits_file": str(input_path),
@@ -991,7 +1035,7 @@ def main() -> int:
  
             for item in report["files"]:
                 fits_path = Path(item["fits_file"])
-                out_path = fits_path.with_suffix(".qa.json")
+                out_path = report_path_for(fits_path)
  
                 if item["status"] == "OK":
                     write_report(item["report"], out_path)

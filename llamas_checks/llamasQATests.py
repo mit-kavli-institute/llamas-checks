@@ -20,6 +20,18 @@ Failure model:
   raise, so the CLI reports a system error.
 - *QA* problems (unidentifiable header, triggered rules) are returned as a
   "fail"/"warn" status, never raised.
+
+Report files:
+- The report is named after the frame, ``<frame>.qa.json`` (the same name the
+  engine gives its sidecars), unless an explicit file is asked for: ``report``
+  naming an existing directory (``"."`` for the current one) or ``report_dir``
+  put the derived name inside that directory; any other ``report`` value is
+  the file to write. ``report`` and ``report_dir`` are mutually exclusive, and
+  a report path ending in a FITS suffix is refused so a frame is never overwritten.
+- A report is written only when the status is "warn" or "fail" (which
+  includes ERROR verdicts and unidentified frames); a passing frame writes
+  nothing unless ``report_all`` is set. Nothing is written when a system
+  problem raises. ``result["report_path"]`` says what was written (or None).
 """
 
 from __future__ import annotations
@@ -31,7 +43,8 @@ from typing import Any
 
 from .paths import CAL_CONFIG_NAME, CONFIG_DIR, DEFAULT_CONFIG_NAME, SCIENCE_CONFIG_NAME
 from .qa_config_validator import QAConfigValidator
-from .qa_engine import QAEngine, QAEngineError, fits as _fits, load_yaml
+from .qa_engine import (FITS_SUFFIXES, QAEngine, QAEngineError, fits as _fits, load_yaml,
+                        report_path_for)
 from .validate import inspect_structure
 
 _VERDICT_TO_STATUS = {"PASS": "pass", "WARN": "warn", "FAIL": "fail"}
@@ -44,15 +57,20 @@ def check_image(
     calib_root: str | None = None,
     report: str | None = None,
     verbose: bool = False,
+    report_dir: str | None = None,
+    report_all: bool = False,
 ) -> dict[str, Any]:
     """Run the QA suite on a single calibration or science FITS/MEF image.
 
-    Returns a dict with at least ``status`` ("pass"|"warn"|"fail") and
-    ``message``. Raises ``QAEngineError`` on system-level problems.
+    Returns a dict with at least ``status`` ("pass"|"warn"|"fail"),
+    ``message`` and ``report_path`` (the JSON file written, or None).
+    Raises ``QAEngineError`` on system-level problems.
     """
     image_path = Path(input_path).expanduser()
     if not image_path.is_file():
         raise QAEngineError(f"input is not a file: {image_path}")
+
+    destination = _report_destination(image_path, report, report_dir)
 
     config_path = _resolve_config_path(qa_yaml, calib_root, suite, image_path)
     config = load_yaml(config_path)
@@ -69,7 +87,7 @@ def check_image(
         if verbose:
             _print_structure(structure)
         return _result("fail", f"QA could not be completed: {exc}",
-                       suite, image_path, report, structure=structure)
+                       suite, image_path, destination, report_all, structure=structure)
 
     structure["placeholder_extensions"] = sorted(
         {r["extension"] for r in engine_report["results"] if r["status"] == "PLACEHOLDER"})
@@ -79,7 +97,7 @@ def check_image(
     # Header preflight: the image type must be identifiable from the header.
     if not engine_report["active_rule_sets"]:
         return _result("fail", _unidentified_message(engine_report, config),
-                       suite, image_path, report, engine_report, structure)
+                       suite, image_path, destination, report_all, engine_report, structure)
 
     # An unevaluable rule (region out of bounds, no finite pixels, unsupported
     # metric) gives an ERROR verdict: the frame could not be judged, so it is a
@@ -88,14 +106,36 @@ def check_image(
         errors = [r["message"] for r in engine_report["results"] if r["status"] == "ERROR"]
         extra = "" if len(errors) <= 3 else f" (+{len(errors) - 3} more)"
         return _result("fail", "QA could not be completed: " + "; ".join(errors[:3]) + extra,
-                       suite, image_path, report, engine_report, structure)
+                       suite, image_path, destination, report_all, engine_report, structure)
 
     status = _VERDICT_TO_STATUS[engine_report["overall_verdict"]]
     message = _build_message(engine_report)
     if verbose:
         _print_details(engine_report)
 
-    return _result(status, message, suite, image_path, report, engine_report, structure)
+    return _result(status, message, suite, image_path, destination, report_all,
+                   engine_report, structure)
+
+
+def _report_destination(image_path: Path, report: str | None,
+                        report_dir: str | None) -> Path | None:
+    """Where the JSON report would go, or None.
+
+    ``<frame>.qa.json`` inside ``report_dir``, or inside ``report`` when that names
+    an existing directory; otherwise ``report`` is the file itself.
+    """
+    if report and report_dir:
+        raise QAEngineError("give either report or report_dir, not both")
+    if report_dir:
+        return report_path_for(image_path, Path(report_dir).expanduser())
+    if not report:
+        return None
+    target = Path(report).expanduser()
+    if target.is_dir():
+        return report_path_for(image_path, target)
+    if target.name.lower().endswith(FITS_SUFFIXES):
+        raise QAEngineError(f"report path looks like a FITS file, refusing to overwrite it: {target}")
+    return target
 
 
 def _inspect_structure(image_path: Path, extensions: list[dict[str, Any]] | None) -> dict[str, Any]:
@@ -205,7 +245,8 @@ def _result(
     message: str,
     suite: str,
     image_path: Path,
-    report_path: str | None,
+    destination: Path | None,
+    report_all: bool,
     engine_report: dict[str, Any] | None = None,
     structure: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -217,17 +258,20 @@ def _result(
         "structure": structure if structure is not None else {
             "n_extensions": None, "expected_extensions": None, "missing_cameras": [],
             "identity_mismatches": [], "placeholder_extensions": []},
+        "report_path": None,
     }
     if engine_report is not None:
         result["overall_verdict"] = engine_report["overall_verdict"]
         result["summary"] = engine_report["summary"]
 
-    if report_path:
+    # A passing frame needs no report: write only for warn/fail unless asked for
+    # every frame. The directory is created on write, so a pass leaves no trace.
+    if destination is not None and (report_all or status != "pass"):
+        result["report_path"] = str(destination)
         payload = dict(result)
         if engine_report is not None:
             payload["report"] = engine_report
-        out = Path(report_path).expanduser()
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
     return result

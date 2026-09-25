@@ -43,8 +43,14 @@ llamas-checks /path/to/LLAMAS_..._mef.fits -v
 through its exit code. With `-v` you get a one-line verdict, a `structure:` line (extensions present, missing
 cameras, placeholders), and a line for every check that fired, naming the detector responsible.
 
-- `--report out.json` writes the full per-check detail to a file — useful for the night log or
-  for sending to someone else to look at. Nothing is written next to the input frame.
+- `--report` writes the full per-check detail to `<frame>.qa.json` — the report has the same
+  name as the frame it describes (`LLAMAS_..._CAL22_mef.fits` → `LLAMAS_..._CAL22_mef.qa.json`),
+  so a night-log directory is easy to match against the raw frames. On its own it writes into the
+  current directory; `--report DIR` (or `--report-dir DIR`) writes into that directory;
+  `--report out.json` writes to an explicit file. Nothing is written next to the input frame.
+- **A report is only written when the frame warns or fails.** A passing frame leaves no file, so
+  a report directory lists exactly the frames worth looking at. Add `--report-all` to also get a
+  report for passing frames.
 - **Exit codes: `0` pass, `1` warn, `2` fail, `3` system error.**
 - It takes one frame at a time. Pointed at a directory it exits `3`.
 
@@ -94,8 +100,9 @@ llamas-checks-engine /path/to/night_dir --config qa_config_cal.yaml --summary-on
 llamas-checks-engine /path/to/night_dir --config qa_config_science.yaml --summary-only | tee sci_qa.log
 ```
 
-For the detailed JSON of one frame, re-run `llamas-checks --report` on it, which writes only
-where you tell it to.
+For the detailed JSON of one frame, re-run `llamas-checks <file> --report` on it, which writes
+`<frame>.qa.json` in the current directory (or in the directory you give `--report`), never
+beside the frame.
 
 ### Three practical notes
 
@@ -111,20 +118,35 @@ where you tell it to.
 Applies to bias, dark, ThAr arc, LDLS lamp flat and twilight/sky flat. The frame type is taken
 from the header product category (`PRODCATG`), not from the `OBJECT` string.
 
+**FAIL is reserved for unambiguous defects; anything that is merely "high" is a WARN.** A FAIL
+on a bias means the frame is not usable as a bias, not that one detector is noisier than usual.
+
 | Check | What it catches | Level |
 |---|---|---|
 | Shutter vs requested time | shutter stuck open, exposure aborted or truncated | **FAIL** |
-| Row / column structure | banding, blooming, or a warming glow on an unilluminated frame | **FAIL** (all cal types) |
-| Saturation | light leak or saturated pixels (above 63000 ADU) | **FAIL** on bias, WARN elsewhere |
+| Edge stripe saturated | light flooding the unilluminated edge of the detector: a railed or grossly overexposed frame | **FAIL** (every frame type, incl. science) |
+| Row / column structure | banding, bars, a warming glow | bias/dark: WARN above the detector's cap, **FAIL** above 4× the cap; LDLS and ThAr (fixed lamp): **FAIL** above the cap; sky flats: WARN |
+| Saturation | light leak or saturated pixels (above 63000 ADU) | WARN above the detector's cap; bias/dark **FAIL** above 1 % of the frame |
 | CCD temperature — warm / hot / shut-off | cooling degrading or failed | WARN / **FAIL** / **FAIL** |
 | Background level and read noise | bias-level drift, excess noise | WARN |
 
 - Whole-frame level and read-noise checks are **not** applied to arcs and flats, because
   brightness scales with exposure time and a fixed level band would be meaningless. The
   unilluminated edge strip is still checked on every frame type.
+- Structure is the standard deviation of the per-row (or per-column) **2 %-trimmed means** (the
+  brightest and faintest 2 % of each line are dropped before averaging), and read noise is the
+  MAD-based robust sigma. Hot pixels, hot-column fragments and cosmic rays therefore do not move
+  them; whole-row/column banding, bars and glow gradients do. (Until 2026-09 these used plain
+  means and a plain std, and a ~20-pixel saturated cluster could FAIL an otherwise perfect bias.)
 - The structure limits are set separately for each detector and are deliberately generous:
-  naturally structured detectors, and red ThAr arcs that normally saturate, pass comfortably.
-  A trip means a **gross** anomaly, not marginal texture.
+  naturally structured detectors (4.A.Red's left-edge glow, 3.A.Blue's fixed banding) and red
+  ThAr arcs that normally saturate pass comfortably. On LDLS flats the red detectors are commonly
+  railed at the longer exposures observers take for the blue channel (the calibration script
+  suggests 0.07 / 0.15 / 0.3 / 0.5 s, but exposure times are the observer's choice); that is
+  normal and does not fire. A saturated *edge stripe* is what marks an overexposed flat, and it
+  does not depend on the exposure time used.
+- Worked examples with images of frames that pass, warn and fail are in
+  [`docs/QA_EXAMPLES.md`](docs/QA_EXAMPLES.md).
 - Cameras missing from the frame are skipped, never failed. A missing camera appears as a
   placeholder extension (a constant frame of all-ones in real frames, all-zeros from the pipeline
   validator; any other constant frame, e.g. a railed detector, is evaluated normally) or as an
@@ -184,8 +206,18 @@ failure.
 ### `llamas-checks` — one frame, config auto-selected
 
 ```
-llamas-checks <file> [-v] [--report out.json] [--qa-yaml cfg.yaml] [--calib-root DIR] [--suite NAME]
+llamas-checks <file> [-v] [--report [PATH] | --report-dir DIR] [--report-all]
+                     [--qa-yaml cfg.yaml] [--calib-root DIR] [--suite NAME]
 ```
+
+| Option | Effect |
+|---|---|
+| `--report` | write the JSON report as `<frame>.qa.json` in the current directory (the frame's name with the FITS suffix replaced; the same name `llamas-checks-engine` gives its sidecars) |
+| `--report PATH` | if `PATH` is an existing directory, write `PATH/<frame>.qa.json`; otherwise `PATH` is the file to write. A path ending in `.fits`/`.fit`/`.fts` is refused (exit 3) so a frame can never be overwritten. |
+| `--report-dir DIR` | write `DIR/<frame>.qa.json`; `DIR` is created when a report is written, so it need not exist yet. Mutually exclusive with `--report`. |
+| `--report-all` | also write the report when the frame passes. Without it a report is written only for **warn** and **fail** (including "could not evaluate" and "could not identify" fails); no file means pass. |
+
+A system error (exit 3) never writes a report.
 
 `--qa-yaml` overrides the auto-selection with an explicit config. `--calib-root` points at a
 directory holding your own `qa_config_cal.yaml` / `qa_config_science.yaml` / `qa_config.yaml`
@@ -232,7 +264,7 @@ editing or regenerating a YAML.
 
 ### `--report` JSON layout
 
-`llamas-checks --report out.json` writes:
+`llamas-checks <file> --report` (any form) writes:
 
 ```json
 {
@@ -240,6 +272,7 @@ editing or regenerating a YAML.
   "message": "WARN: 2 warn check(s): edge_background_level@2.A.Green, ...",
   "suite": "basic_cal",
   "fits_file": "/path/to/LLAMAS_..._mef.fits",
+  "report_path": "/path/to/reports/LLAMAS_..._mef.qa.json",
   "overall_verdict": "WARN",
   "summary": {"total_checks": 190, "evaluated_checks": 154, "skipped_checks": 36,
               "passed_checks": 152, "failed_checks": 2, "fail_effects": 0, "warn_effects": 2,
@@ -255,7 +288,8 @@ editing or regenerating a YAML.
 }
 ```
 
-`status` (`pass`/`warn`/`fail`) is what the exit code is derived from. `overall_verdict`,
+`status` (`pass`/`warn`/`fail`) is what the exit code is derived from. `report_path` is the file
+this JSON was written to (`null` in the returned dict when nothing was written). `overall_verdict`,
 `summary` and `report` are present whenever the engine ran; `report.results` is the per-rule list
 (`rule`, `extension`, `hdu_index`, `measured_value`, `limits`, `passed`, `severity`,
 `verdict_effect`, `status` = `EVALUATED`/`SKIPPED`/`PLACEHOLDER`/`MISSING`/`ERROR`, `message`).
@@ -280,15 +314,23 @@ object on its own: `fits_file`, `instrument`, `metadata`, `active_rule_sets`, `o
 from llamas_checks.llamasQATests import check_image
 from llamas_checks.validate import inspect_structure
 
-result = check_image("/path/to/LLAMAS_..._mef.fits", report="out.json")
+result = check_image("/path/to/LLAMAS_..._mef.fits", report_dir="/path/to/reports")
 print(result["status"], result["message"], result["structure"]["missing_cameras"])
+print(result["report_path"])   # None when the frame passed (unless report_all=True)
 structure = inspect_structure("/path/to/LLAMAS_..._mef.fits")   # header-only, no pixel reads
 ```
 
 - `check_image(input_path, suite="basic_cal", qa_yaml=None, calib_root=None, report=None,
-  verbose=False) -> dict` — the function behind `llamas-checks`. Returns `status`, `message`,
-  `suite`, `fits_file`, `structure`, and (when the engine ran) `overall_verdict` and `summary`.
-  Raises `QAEngineError` on system-level problems; QA problems are returned, never raised.
+  verbose=False, report_dir=None, report_all=False) -> dict` — the function behind
+  `llamas-checks`. Returns `status`, `message`, `suite`, `fits_file`, `structure`, `report_path`
+  (the JSON written, or `None`), and (when the engine ran) `overall_verdict` and `summary`.
+  `report` names an existing directory (`"."` for the current one) or an explicit file;
+  `report_dir` is a directory, created on write, in which the report is named `<frame>.qa.json`;
+  give one or the other. A report is written only for warn/fail unless
+  `report_all=True`. Raises `QAEngineError` on system-level problems; QA problems are returned,
+  never raised.
+- `report_path_for(fits_path, directory=None) -> Path` in `llamas_checks.qa_engine` — the
+  `<frame>.qa.json` name, beside the frame or in `directory`; both commands use it.
 - `QAEngine(config).run(Path) -> dict` in `llamas_checks.qa_engine` — the rule engine used by
   both commands; `load_yaml(path)` and `validate_config(config, path)` sit beside it. This is
   the report-free way to run many frames in-process (see `scripts/batch_tally.py`).
@@ -303,9 +345,11 @@ The observing GUI shells out to `llamas-checks <file>` (or `python -m llamas_che
 when a console script is not on the PATH) after each frame is written and **branches on the
 exit code**: `0` pass, `1` warn, `2` fail, `3` the check itself did not run. Nothing is printed
 on `0`–`2`, so there is no output to parse. For detail — which rule fired on which detector, the
-missing/placeholder cameras — pass `--report <path>` and read the JSON described above. Do not
-give the GUI `llamas-checks-engine`: its exit codes mean different things and it writes reports
-into the raw data directory.
+missing/placeholder cameras — pass `--report <night log dir>` (or `--report-dir`, which also
+creates the directory) and read `<night log dir>/<frame>.qa.json`, laid out as described above. The file exists only when the
+frame warned or failed (exit `1` or `2`); on exit `0` there is nothing to read, unless the GUI
+also passes `--report-all`. Do not give the GUI `llamas-checks-engine`: its exit codes mean
+different things and it writes reports into the raw data directory.
 
 ## Regenerating thresholds
 
@@ -320,6 +364,8 @@ from these environment variables, which are only argparse defaults:
 | `LLAMAS_QA_BASELINES` | `--baselines-root` | the `QA_baselines` folder: `copies/` (untouched originals) plus the sorted `Bias/ Darks/ Arcs/ lamp_flats/ twilight_flats/` |
 | `LLAMAS_QA_WARM_DIR` | `--warm-dir` | the 2026-05-06 warm-incident frames (validation only) |
 | `LLAMAS_QA_COMMISSIONING_DIR` | `--commissioning-dir` | the `ut20260710_11` commissioning frames (validation only) |
+| `LLAMAS_QA_SEPT06_DIR` | `--sept06-dir` | `Llamas_Commissioning_Data/20260906_07_cals` (validation and examples only) |
+| `LLAMAS_QA_SEPT07_DIR` | `--sept07-dir` | `Llamas_Commissioning_Data/20260907_08` (validation and examples only) |
 
 For example:
 
@@ -333,12 +379,17 @@ Then:
 
 ```bash
 python scripts/sort_baselines.py                 # copies/ -> per-type folders + manifest.csv (idempotent)
-python scripts/extract_stats.py                  # per-file, per-extension stats -> ./qa_stats_raw.json (--jobs 6)
-python scripts/aggregate_thresholds.py           # -> llamas_checks/baselines/qa_thresholds_derived.json + qa_tracking_baselines.csv
+python scripts/extract_stats.py --out llamas_checks/baselines/qa_stats_raw.json   # per-file, per-extension stats (--jobs 6)
+python scripts/aggregate_thresholds.py --raw llamas_checks/baselines/qa_stats_raw.json  # -> qa_thresholds_derived.json + qa_tracking_baselines.csv
 python scripts/gen_configs.py                    # -> llamas_checks/configs/qa_config_{cal,science}.yaml
 llamas-checks-validate llamas_checks/configs/qa_config_cal.yaml
 llamas-checks-validate llamas_checks/configs/qa_config_science.yaml
+python scripts/gen_thresholds_doc.py             # -> docs/QA_THRESHOLDS_TABLES.md
+python scripts/gen_examples_doc.py               # -> docs/QA_EXAMPLES.md + docs/images/ (needs all five data roots)
 ```
+
+The raw per-extension statistics are committed (`llamas_checks/baselines/qa_stats_raw.json`), so
+everything from `aggregate_thresholds.py` onwards can be reproduced without the baseline frames.
 
 `aggregate_thresholds.py` prints its self-checks (band breaches among normal frames, the held-out
 June-2026 odd dark against the dark structure caps, and — when `--warm-dir` is set — the warm
@@ -351,7 +402,7 @@ Two validation scripts sit beside them:
 
 ```bash
 python scripts/batch_tally.py        # all baseline files per type, in-process, no .qa.json written -> ./batch_tally.json
-python scripts/run_qa_tests.py       # the 15-case matrix through the engine CLI (writes .qa.json next to the inputs) -> ./qa_test_results.json
+python scripts/run_qa_tests.py       # the 23-case matrix through the engine CLI (writes .qa.json next to the inputs) -> ./qa_test_results.json
 ```
 
 `run_qa_tests.py` skips any case whose root is unset or whose file is absent (`MISSING FILE`).
@@ -369,10 +420,11 @@ llamas_checks/                 the package
   validate.py                  MEF structure inspection (inspect_structure, detector_label)
   paths.py                     CONFIG_DIR, BASELINES_DIR, shipped config names
   configs/                     qa_config.yaml (base), qa_config_cal.yaml, qa_config_science.yaml (generated)
-  baselines/                   qa_thresholds_derived.json, qa_tracking_baselines.csv
-scripts/                       threshold pipeline + validation scripts (see above)
+  baselines/                   qa_stats_raw.json (per-extension baseline stats), qa_thresholds_derived.json, qa_tracking_baselines.csv
+scripts/                       threshold pipeline + validation + doc generators (see above)
 tests/                         pytest suite
 docs/QA_CHECKS_CATALOGUE.md    every check, its threshold, and the bad-image test cases (start here)
+docs/QA_EXAMPLES.md            real frames that pass, warn and fail, with images (scripts/gen_examples_doc.py)
 docs/QA_THRESHOLDS_TABLES.md   generated per-detector limits (scripts/gen_thresholds_doc.py)
 docs/QA_TESTS_SUMMARY.md       design rationale, provenance and the July-2026 validation run
 ```
@@ -387,7 +439,8 @@ pytest tests/
 The tests build small synthetic MEF files, so no instrument data is needed.
 
 What each test asserts, the real bad-frame regression cases and the current thresholds are
-catalogued in [`docs/QA_CHECKS_CATALOGUE.md`](docs/QA_CHECKS_CATALOGUE.md).
+catalogued in [`docs/QA_CHECKS_CATALOGUE.md`](docs/QA_CHECKS_CATALOGUE.md); pictures of frames
+that pass, warn and fail are in [`docs/QA_EXAMPLES.md`](docs/QA_EXAMPLES.md).
 
 ## Licence
 
