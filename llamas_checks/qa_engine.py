@@ -69,6 +69,15 @@ STRUCTURE_TRIM_FRACTION = 0.02
 # Constant-frame values that mark a software placeholder for a missing camera:
 # 1.0 in real frames, 0.0 from the pipeline validator (validate.create_placeholder_hdu).
 PLACEHOLDER_VALUES = (0.0, 1.0)
+
+# Signal-normalised structure metrics: the row/column structure of a lamp frame
+# (ThAr arc) is the line pattern itself and scales with the lamp signal, so the
+# absolute metric encodes exposure time. These divide it by the frame's signal
+# above the unilluminated edge stripe (full-region mean - background-region
+# median), which makes 0.07 s and 1 s arcs comparable.
+STRUCTURE_NORM_TYPES = ("row_structure_norm", "column_structure_norm")
+DEFAULT_SIGNAL_REGION = "bottom_stripe"
+DEFAULT_MIN_SIGNAL = 2.0   # ADU; below this the ratio is noise and the rule SKIPs
  
  
 @dataclass
@@ -231,6 +240,9 @@ class QAEngine:
         # partitioning the same 4-Mpix frame twice.
         self._placeholder_cache: dict[int, bool] = {}
         self._metric_cache: dict[tuple[int, str, str], Any] = {}
+        # (hdu, region, background region) -> signal above the edge stripe, shared by
+        # the row and column normalised-structure metrics of one detector.
+        self._signal_cache: dict[tuple[int, str, str], float] = {}
         # memmap=False is required for FITS files containing BZERO/BSCALE/BLANK
         # keywords, because Astropy needs to scale the image data in memory.
         with fits.open(fits_path, memmap=False) as hdul:
@@ -787,10 +799,16 @@ class QAEngine:
             region = self.config["regions"][region_name]
             metric = self.config["metrics"][metric_name]
             region_data = self._extract_region(np.asarray(data), region, region_name, extension_name)
-            if metric.get("type") == "background_gradient_rate":
+            metric_type = metric.get("type")
+            if metric_type == "background_gradient_rate":
                 # rate metrics need the exposure time; absent/too-short -> SKIP this rule
                 exptime = self._resolve_exptime(hdul, metric)
                 value = self._compute_metric(region_data, metric, exptime=exptime)
+            elif metric_type in STRUCTURE_NORM_TYPES:
+                # normalised structure needs the lamp signal; too faint -> SKIP this rule
+                signal = self._resolve_signal(data, hdu_index, region_name, region_data,
+                                              metric, extension_name)
+                value = self._compute_metric(region_data, metric, signal=signal)
             else:
                 value = self._compute_metric(region_data, metric)
         except QAEngineError as exc:
@@ -832,6 +850,37 @@ class QAEngine:
             )
         return data[..., y_start:y_end, x_start:x_end]
  
+    def _resolve_signal(self, data: Any, hdu_index: int, region_name: str, region_data: Any,
+                        metric: dict[str, Any], extension_name: str | None) -> float:
+        """Lamp signal for a normalised-structure metric: mean of the metric's region
+        minus the median of ``metric['background_region']`` (default bottom_stripe),
+        computed once per HDU per run. Below ``metric['min_signal']`` (default 2 ADU)
+        raises LookupMissError so the rule is SKIPPED, like a too-short exposure for
+        the gradient-rate metric: the ratio of two noise terms would be meaningless.
+        """
+        background_region = metric.get("background_region", DEFAULT_SIGNAL_REGION)
+        min_signal = float(metric.get("min_signal", DEFAULT_MIN_SIGNAL))
+        cache = getattr(self, "_signal_cache", None)
+        key = (hdu_index, region_name, background_region)
+        if cache is not None and key in cache:
+            signal = cache[key]
+        else:
+            background = self.config["regions"].get(background_region)
+            if background is None:
+                raise QAEngineError(f"background_region {background_region!r} of a normalised "
+                                    "structure metric is not a configured region")
+            background_data = self._extract_region(np.asarray(data), background,
+                                                   background_region, extension_name)
+            signal = (self._compute_metric(region_data, {"type": "mean"})
+                      - self._compute_metric(background_data, {"type": "median"}))
+            if cache is not None:
+                cache[key] = signal
+        if not np.isfinite(signal) or signal < min_signal:
+            raise LookupMissError(
+                f"signal {signal:.4g} ADU (region mean minus {background_region} median) is "
+                f"below min_signal {min_signal:g}; structure not normalised for this detector")
+        return signal
+
     def _resolve_exptime(self, hdul: Any, metric: dict[str, Any]) -> float:
         """Exposure time (s) for a rate metric: first populated positive value among
         ``metric['exptime_keys']`` (default SEXPTIME -> REXPTIME -> EXPTIME; SEXPTIME
@@ -849,7 +898,10 @@ class QAEngine:
 
     @staticmethod
     def _compute_metric(region_data: Any, metric: dict[str, Any],
-                        exptime: float | None = None) -> float:
+                        exptime: float | None = None, signal: float | None = None) -> float:
+        """Evaluate ``metric`` on ``region_data``. ``exptime`` is required by the
+        gradient-rate metric, ``signal`` (ADU above the edge stripe, see
+        ``_resolve_signal``) by the normalised structure metrics."""
         raw = np.asarray(region_data)
         integer_input = np.issubdtype(raw.dtype, np.integer)
         if integer_input:
@@ -925,18 +977,25 @@ class QAEngine:
         if metric_type == "count_above":
             return float(np.count_nonzero(finite_values > metric["threshold"]))
         
-        if metric_type in ("row_structure", "column_structure"):
+        if metric_type in ("row_structure", "column_structure") or metric_type in STRUCTURE_NORM_TYPES:
             # Banding metric: std of the per-row (or per-column) TRIMMED means.
             # Whole-row/column offsets, bars and glow gradients move the profile;
             # isolated hot pixels, hot-column fragments and cosmic rays do not
             # (a plain mean profile let a 20-pixel saturated cluster FAIL a bias;
             # a median profile missed real bars confined to part of a column).
-            axis = -1 if metric_type == "row_structure" else -2  # collapse cols / rows
+            # The *_norm variants divide by the lamp signal so a bright 1 s arc
+            # and a faint 0.07 s arc give the same number for the same pattern.
+            axis = -1 if metric_type.startswith("row_structure") else -2  # collapse cols / rows
             profile = trimmed_mean_profile(values, axis)
             profile = profile[np.isfinite(profile)]
             if profile.size == 0:
                 raise QAEngineError("structure metric has no finite rows/columns")
-            return float(np.nanstd(profile))
+            structure = float(np.nanstd(profile))
+            if metric_type in STRUCTURE_NORM_TYPES:
+                if signal is None or not np.isfinite(signal) or signal <= 0:
+                    raise QAEngineError(f"{metric_type} requires a positive signal")
+                return structure / float(signal)
+            return structure
         
         raise QAEngineError(f"unsupported metric type {metric_type!r}")
  

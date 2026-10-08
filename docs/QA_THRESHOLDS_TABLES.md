@@ -6,7 +6,7 @@
 
 Baseline epochs: 2026-04-07, 2026-05-02, 2026-06-30; 3344 normal detector-frame records; held out: 2026-06-04_20-36-33. Method: MAD sigma-clip screen; level band +/-max(6sig,15.0ADU); caps med+8sig. Regions: edge stripes y[2:28]&[2020:2046] x[100:1948]; sat>63000.
 
-Units: ADU for levels, RMS and structure metrics; fraction of pixels for saturation; °C for temperature; seconds for shutter tolerances. Level and edge-background limits are a min–max band (WARN outside); RMS (1.4826 x MAD), structure (std of the per-row / per-column medians) and saturation are one-sided caps. On BIAS/DARK the row/col caps are WARN and the 4x "FAIL max" columns are the `*_gross` FAIL tier; on LDLS/ARC the structure cap is FAIL, on SKY it is WARN. Static FAIL rules on every set: `edge_saturated` (bottom-stripe median > 63000 ADU) and, on BIAS/DARK, `saturation_gross` (> 1 % of pixels above 63000 ADU). "—" means that readout mode is not modelled for that detector (the rule is SKIPPED, never failed). A missing camera in a frame is a placeholder extension: its pixel rules are skipped and the frame FAILs `camera_present` for it unless the camera is listed in `configs/camera_status.yaml`.
+Units: ADU for levels, RMS and structure metrics; fraction of pixels for saturation; °C for temperature; seconds for shutter tolerances. Level and edge-background limits are a min–max band (WARN outside); RMS (1.4826 x MAD), structure (std of the per-row / per-column medians) and saturation are one-sided caps. On BIAS/DARK the row/col caps are WARN and the 4x "FAIL max" columns are the `*_gross` FAIL tier; on LDLS/ARC the structure cap is FAIL, on SKY it is WARN (on ARC the structure is divided by the lamp signal, see that section). Static FAIL rules on every set: `edge_saturated` (bottom-stripe median > 63000 ADU) and, on BIAS/DARK, `saturation_gross` (> 1 % of pixels above 63000 ADU). "—" means that readout mode is not modelled for that detector (the rule is SKIPPED, never failed). A missing camera in a frame is a placeholder extension: its pixel rules are skipped and the frame FAILs `camera_present` for it unless the camera is listed in `configs/camera_status.yaml`.
 
 ## Shutter consistency (`shutter_exptime_consistency`, FAIL)
 
@@ -248,60 +248,62 @@ Margins over each camera's own baseline median: red WARN +10 / FAIL +16 °C, gre
 
 ## ARC_THAR (`CAL.R-ARC`)
 
+Row / column structure on this type is **normalised by the lamp signal** (structure ÷ (full-frame mean − bottom-stripe median), dimensionless) so the cap does not depend on the exposure time; the sample is pooled over both readout modes, so the FAST and SLOW caps are identical. Rules SKIP when the signal is below 2 ADU.
+
 ### ARC_THAR — readout mode FAST
 
-| detector | n baseline | edge-bg min | edge-bg max | row max | col max | sat frac max |
+| detector | n baseline | edge-bg min | edge-bg max | row max (÷ signal) | col max (÷ signal) | sat frac max |
 |---|---|---|---|---|---|---|
-| 1.A.Red | 30 | 1733.31 | 1786.69 | 180.8352 | 2077.8238 | 0.0097 |
-| 1.A.Green | 30 | 864 | 894 | 19.683 | 34.2573 | 0.0005 |
-| 1.A.Blue | — | 1212 | 1242 | 32.0256 | 55.2321 | 0.0005 |
-| 1.B.Red | 30 | 1522.57 | 1620.43 | 217.9082 | 3568.6064 | 0.0152 |
-| 1.B.Green | 30 | 1029 | 1059 | 33.2456 | 52.9871 | 0.0005 |
-| 1.B.Blue | 30 | 1212 | 1242 | 23.2644 | 50.6553 | 0.0005 |
-| 2.A.Red | 30 | 799.47 | 879.53 | 603.1754 | 3278.6296 | 0.0108 |
-| 2.A.Green | 30 | 844.21 | 879.79 | 31.4287 | 41.8558 | 0.0005 |
-| 2.A.Blue | 30 | 780.37 | 842.63 | 28.3661 | 55.2321 | 0.0005 |
-| 2.B.Red | 30 | 1627.47 | 1707.53 | 584.2526 | 3463.1028 | 0.0213 |
-| 2.B.Green | 30 | 745 | 775 | 43.5358 | 52.086 | 0.0005 |
-| 2.B.Blue | 30 | 1416 | 1446 | 27.3458 | 49.8052 | 0.0005 |
-| 3.A.Red | 30 | 1726.37 | 1788.63 | 300.9748 | 2708.0747 | 0.0148 |
-| 3.A.Green | 30 | 775 | 805 | 34.3895 | 38.9679 | 0.0005 |
-| 3.A.Blue | 30 | 1433 | 1463 | 2123.0597 | 50.8189 | 0.0007 |
-| 3.B.Red | 30 | 1456.47 | 1536.53 | 211.5088 | 3763.3375 | 0.0169 |
-| 3.B.Green | 30 | 857 | 887 | 41.0523 | 56.1379 | 0.0005 |
-| 3.B.Blue | 30 | 1056 | 1086 | 34.846 | 69.4375 | 0.0005 |
-| 4.A.Red | 30 | 1505.37 | 1567.63 | 708.2349 | 3087.3394 | 0.0182 |
-| 4.A.Green | 30 | 849.21 | 884.79 | 24.0357 | 45.795 | 0.0005 |
-| 4.A.Blue | — | 1212 | 1242 | 32.0256 | 55.2321 | 0.0005 |
-| 4.B.Red | 30 | 1881.52 | 1970.48 | 220.2989 | 3187.7263 | 0.0205 |
-| 4.B.Green | 30 | 768.31 | 821.69 | 46.5644 | 52.5158 | 0.0005 |
-| 4.B.Blue | 30 | 848.76 | 893.24 | 32.0256 | 66.5037 | 0.0005 |
+| 1.A.Red | 30 | 1733.31 | 1786.69 | 0.2571 | 1.7189 | 0.0097 |
+| 1.A.Green | 30 | 864 | 894 | 0.443 | 0.6139 | 0.0005 |
+| 1.A.Blue | — | 1212 | 1242 | 0.5371 | 1.0079 | 0.0005 |
+| 1.B.Red | 30 | 1522.57 | 1620.43 | 0.2336 | 2.2146 | 0.0152 |
+| 1.B.Green | 30 | 1029 | 1059 | 0.4633 | 0.6626 | 0.0005 |
+| 1.B.Blue | 30 | 1212 | 1242 | 0.5173 | 1.0884 | 0.0005 |
+| 2.A.Red | 30 | 799.47 | 879.53 | 0.4273 | 2.0793 | 0.0108 |
+| 2.A.Green | 30 | 844.21 | 879.79 | 0.6224 | 0.6636 | 0.0005 |
+| 2.A.Blue | 30 | 780.37 | 842.63 | 0.5139 | 0.9603 | 0.0005 |
+| 2.B.Red | 30 | 1627.47 | 1707.53 | 0.4902 | 2.501 | 0.0213 |
+| 2.B.Green | 30 | 745 | 775 | 0.6513 | 0.9124 | 0.0005 |
+| 2.B.Blue | 30 | 1416 | 1446 | 0.5444 | 0.9783 | 0.0005 |
+| 3.A.Red | 30 | 1726.37 | 1788.63 | 0.3362 | 1.8917 | 0.0148 |
+| 3.A.Green | 30 | 775 | 805 | 0.6009 | 0.6306 | 0.0005 |
+| 3.A.Blue | 30 | 1433 | 1463 | 106.3276 | 1.2128 | 0.0007 |
+| 3.B.Red | 30 | 1456.47 | 1536.53 | 0.245 | 2.3943 | 0.0169 |
+| 3.B.Green | 30 | 857 | 887 | 0.5859 | 0.7874 | 0.0005 |
+| 3.B.Blue | 30 | 1056 | 1086 | 0.5371 | 1.0079 | 0.0005 |
+| 4.A.Red | 30 | 1505.37 | 1567.63 | 0.682 | 2.0795 | 0.0182 |
+| 4.A.Green | 30 | 849.21 | 884.79 | 0.369 | 0.6534 | 0.0005 |
+| 4.A.Blue | — | 1212 | 1242 | 0.5371 | 1.0079 | 0.0005 |
+| 4.B.Red | 30 | 1881.52 | 1970.48 | 0.238 | 2.2991 | 0.0205 |
+| 4.B.Green | 30 | 768.31 | 821.69 | 0.6135 | 0.6472 | 0.0005 |
+| 4.B.Blue | 30 | 848.76 | 893.24 | 0.5035 | 0.9913 | 0.0005 |
 
 ### ARC_THAR — readout mode SLOW
 
-| detector | n baseline | edge-bg min | edge-bg max | row max | col max | sat frac max |
+| detector | n baseline | edge-bg min | edge-bg max | row max (÷ signal) | col max (÷ signal) | sat frac max |
 |---|---|---|---|---|---|---|
-| 1.A.Red | 9 | 1667 | 1697 | 417.1484 | 2787.5453 | 0.0222 |
-| 1.A.Green | 9 | 678 | 708 | 41.5788 | 68.4073 | 0.0005 |
-| 1.A.Blue | — | 663 | 693 | 62.6712 | 109.3476 | 0.0005 |
-| 1.B.Red | 9 | 1699 | 1729 | 621.5149 | 5228.846 | 0.036 |
-| 1.B.Green | 9 | 646 | 676 | 65.9574 | 103.4207 | 0.0005 |
-| 1.B.Blue | 9 | 689 | 719 | 45.8414 | 98.671 | 0.0005 |
-| 2.A.Red | 9 | 1598 | 1628 | 837.5976 | 4331.1349 | 0.0296 |
-| 2.A.Green | 9 | 622 | 652 | 61.602 | 84.3156 | 0.0005 |
-| 2.A.Blue | 9 | 536 | 566 | 55.3577 | 109.3476 | 0.0005 |
-| 2.B.Red | 9 | 1580 | 1610 | 865.8461 | 4908.2441 | 0.0454 |
-| 2.B.Green | 9 | 616 | 646 | 79.2916 | 96.6519 | 0.0005 |
-| 2.B.Blue | 9 | 489 | 519 | 53.0144 | 96.8682 | 0.0005 |
-| 3.A.Red | 9 | 1692.21 | 1727.79 | 582.6476 | 3094.4329 | 0.0271 |
-| 3.A.Green | 9 | 676.21 | 711.79 | 70.2818 | 79.6153 | 0.0005 |
-| 3.A.Blue | 9 | 480 | 510 | 2152.9943 | 101.5939 | 0.0007 |
-| 3.B.Red | 9 | 1640 | 1670 | 630.0225 | 5038.105 | 0.0381 |
-| 3.B.Green | 9 | 661 | 691 | 79.7162 | 108.9111 | 0.0005 |
-| 3.B.Blue | 9 | 821 | 851 | 69.5845 | 135.4908 | 0.0005 |
-| 4.A.Red | 9 | 1552 | 1582 | 953.4854 | 4028.8346 | 0.0357 |
-| 4.A.Green | 9 | 285 | 315 | 48.5941 | 94.3612 | 0.0005 |
-| 4.A.Blue | — | 663 | 693 | 62.6712 | 109.3476 | 0.0005 |
-| 4.B.Red | 9 | 1734 | 1764 | 465.5412 | 3604.914 | 0.0334 |
-| 4.B.Green | 9 | 654 | 684 | 93.5251 | 106.0287 | 0.0005 |
-| 4.B.Blue | 9 | 663 | 693 | 62.6712 | 133.174 | 0.0005 |
+| 1.A.Red | 9 | 1667 | 1697 | 0.2571 | 1.7189 | 0.0222 |
+| 1.A.Green | 9 | 678 | 708 | 0.443 | 0.6139 | 0.0005 |
+| 1.A.Blue | — | 663 | 693 | 0.5371 | 1.0079 | 0.0005 |
+| 1.B.Red | 9 | 1699 | 1729 | 0.2336 | 2.2146 | 0.036 |
+| 1.B.Green | 9 | 646 | 676 | 0.4633 | 0.6626 | 0.0005 |
+| 1.B.Blue | 9 | 689 | 719 | 0.5173 | 1.0884 | 0.0005 |
+| 2.A.Red | 9 | 1598 | 1628 | 0.4273 | 2.0793 | 0.0296 |
+| 2.A.Green | 9 | 622 | 652 | 0.6224 | 0.6636 | 0.0005 |
+| 2.A.Blue | 9 | 536 | 566 | 0.5139 | 0.9603 | 0.0005 |
+| 2.B.Red | 9 | 1580 | 1610 | 0.4902 | 2.501 | 0.0454 |
+| 2.B.Green | 9 | 616 | 646 | 0.6513 | 0.9124 | 0.0005 |
+| 2.B.Blue | 9 | 489 | 519 | 0.5444 | 0.9783 | 0.0005 |
+| 3.A.Red | 9 | 1692.21 | 1727.79 | 0.3362 | 1.8917 | 0.0271 |
+| 3.A.Green | 9 | 676.21 | 711.79 | 0.6009 | 0.6306 | 0.0005 |
+| 3.A.Blue | 9 | 480 | 510 | 106.3276 | 1.2128 | 0.0007 |
+| 3.B.Red | 9 | 1640 | 1670 | 0.245 | 2.3943 | 0.0381 |
+| 3.B.Green | 9 | 661 | 691 | 0.5859 | 0.7874 | 0.0005 |
+| 3.B.Blue | 9 | 821 | 851 | 0.5371 | 1.0079 | 0.0005 |
+| 4.A.Red | 9 | 1552 | 1582 | 0.682 | 2.0795 | 0.0357 |
+| 4.A.Green | 9 | 285 | 315 | 0.369 | 0.6534 | 0.0005 |
+| 4.A.Blue | — | 663 | 693 | 0.5371 | 1.0079 | 0.0005 |
+| 4.B.Red | 9 | 1734 | 1764 | 0.238 | 2.2991 | 0.0334 |
+| 4.B.Green | 9 | 654 | 684 | 0.6135 | 0.6472 | 0.0005 |
+| 4.B.Blue | 9 | 663 | 693 | 0.5035 | 0.9913 | 0.0005 |

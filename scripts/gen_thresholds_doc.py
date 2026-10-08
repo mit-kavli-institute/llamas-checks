@@ -49,8 +49,13 @@ def modes_in(lookup):
     return modes
 
 
-def cal_type_section(name, prodcatg, has_level, detectors, tables, derived):
+def cal_type_section(name, prodcatg, has_level, detectors, tables, derived, normalised=False):
     out = [f"## {name} (`{prodcatg}`)", ""]
+    if normalised:
+        out += ["Row / column structure on this type is **normalised by the lamp signal** "
+                "(structure ÷ (full-frame mean − bottom-stripe median), dimensionless) so the cap "
+                "does not depend on the exposure time; the sample is pooled over both readout modes, "
+                "so the FAST and SLOW caps are identical. Rules SKIP when the signal is below 2 ADU.", ""]
     edge, struct, sat = tables[f"edge_bg_{name}"], tables[f"struct_{name}"], tables[f"sat_{name}"]
     level = tables.get(f"level_{name}") if has_level else None
     n_files = {}
@@ -61,7 +66,8 @@ def cal_type_section(name, prodcatg, has_level, detectors, tables, derived):
         header = ["detector", "n baseline", "edge-bg min", "edge-bg max"]
         if level:
             header += ["level min", "level max", "rms (robust) max"]
-        header += ["row max", "col max"]
+        header += (["row max (÷ signal)", "col max (÷ signal)"] if normalised
+                   else ["row max", "col max"])
         if has_level:
             header += ["row FAIL max (4x)", "col FAIL max (4x)"]
         header += ["sat frac max"]
@@ -163,7 +169,8 @@ def main() -> int:
         "seconds for shutter tolerances. Level and edge-background limits are a min–max band (WARN outside); "
         "RMS (1.4826 x MAD), structure (std of the per-row / per-column medians) and saturation are one-sided "
         "caps. On BIAS/DARK the row/col caps are WARN and the 4x \"FAIL max\" columns are the `*_gross` FAIL "
-        "tier; on LDLS/ARC the structure cap is FAIL, on SKY it is WARN. Static FAIL rules on every set: "
+        "tier; on LDLS/ARC the structure cap is FAIL, on SKY it is WARN (on ARC the structure is divided by "
+        "the lamp signal, see that section). Static FAIL rules on every set: "
         "`edge_saturated` (bottom-stripe median > 63000 ADU) and, on BIAS/DARK, `saturation_gross` "
         "(> 1 % of pixels above 63000 ADU). \"—\" means that readout mode is not modelled for "
         "that detector (the rule is SKIPPED, never failed). A missing camera in a frame is a placeholder "
@@ -175,7 +182,10 @@ def main() -> int:
     doc += temperature_section(detectors, tables["temp"], derived)
     doc += science_section(sci)
     for name, prodcatg, has_level in CAL_TYPES:
-        doc += cal_type_section(name, prodcatg, has_level, detectors, tables, derived)
+        rules = {r["name"]: r for r in cal["rule_sets"][name]["rules"]}
+        normalised = rules["row_structure"]["metric"].endswith("_norm")
+        doc += cal_type_section(name, prodcatg, has_level, detectors, tables, derived,
+                                normalised=normalised)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text("\n".join(doc).rstrip() + "\n", encoding="utf-8")

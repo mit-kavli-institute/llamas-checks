@@ -40,6 +40,14 @@ FLOOR_STRUCT = 2.0   # min structure cap
 FLOOR_RMS = 5.0      # min rms cap, ADU
 FLOOR_SAT = 0.0005   # min saturation-fraction cap
 
+# Signal-normalised structure (structure / (full_mean - edge_med)) for lamp frames
+# whose structure IS the lamp pattern and scales with exposure: the absolute caps
+# encoded the baseline exposure times (every FAST arc was 0.07-0.4 s, every SLOW
+# arc 1 s), so a 1 s FAST arc failed. The ratio is independent of exposure and
+# readout mode, so for these types the sample is pooled over both modes.
+MIN_SIGNAL_NORM = 2.0                 # ADU; fainter records are excluded (noise / noise)
+POOL_MODES_FOR_NORM = ("CAL.R-ARC",)  # types whose normalised caps pool FAST+SLOW
+
 # Per-detector CCD temperature: each camera is monitored against its OWN healthy
 # baseline and WARN/FAIL on warming above it. Colour-aware margins -- the red
 # detectors run warmer and can be more thermally variable, so they get extra
@@ -97,6 +105,27 @@ def one_sided_cap(screened, floor):
     return round(max(med + N_CAP * robust_sigma(screened), med * 3.0, floor), 4)
 
 
+def normalised_structure(rs):
+    """Caps for structure / signal over the records ``rs`` (signal = full-frame mean
+    minus edge-stripe median; records fainter than MIN_SIGNAL_NORM are dropped)."""
+    rows, cols = [], []
+    for r in rs:
+        sig = r.get("full_mean")
+        edge = r.get("edge_med")
+        if sig is None or edge is None or not np.isfinite(sig) or not np.isfinite(edge):
+            continue
+        sig = sig - edge
+        if sig < MIN_SIGNAL_NORM:
+            continue
+        rows.append(r["row_struct"] / sig)
+        cols.append(r["col_struct"] / sig)
+    if not rows:
+        return None
+    return {"row_max": heavy_tail_cap(rows, 0.0), "col_max": heavy_tail_cap(cols, 0.0),
+            "n_norm": len(rows), "min_signal": MIN_SIGNAL_NORM,
+            "observed_row": obs_stats(np.asarray(rows)), "observed_col": obs_stats(np.asarray(cols))}
+
+
 def heavy_tail_cap(vals, floor):
     """One-sided cap for HEAVY-TAILED quantities (dark structure/RMS vary frame to
     frame from cosmic rays / hot columns). Uses each detector's OWN unscreened
@@ -137,6 +166,11 @@ def main():
     groups = {}
     for r in normal:
         groups.setdefault((r["prodcatg"], r["mode"], det_name(r)), []).append(r)
+    # mode-pooled samples for the signal-normalised structure of lamp frames
+    pooled = {}
+    for r in normal:
+        if r["prodcatg"] in POOL_MODES_FOR_NORM:
+            pooled.setdefault((r["prodcatg"], det_name(r)), []).append(r)
 
     derived = {}
     tracking_rows = []
@@ -166,6 +200,8 @@ def main():
                           "col_max": heavy_tail_cap(col_v, FLOOR_STRUCT),
                           "observed_row": obs_stats(np.asarray(row_v)),
                           "observed_col": obs_stats(np.asarray(col_v))},
+            "structure_norm": normalised_structure(
+                pooled[(pc, det)] if pc in POOL_MODES_FOR_NORM else rs),
             "sat_frac_max": heavy_tail_cap(sat_v, FLOOR_SAT),
         }
         by_date = {}
@@ -236,7 +272,10 @@ def main():
                     "epochs": sorted(set(r["date"] for r in normal)),
                     "robustness": f"MAD sigma-clip screen; level band +/-max({K_LEVEL}sig,{FLOOR_LEVEL}ADU); "
                                   f"caps med+{N_CAP}sig",
-                    "region_convention": "edge stripes y[2:28]&[2020:2046] x[100:1948]; sat>63000"},
+                    "region_convention": "edge stripes y[2:28]&[2020:2046] x[100:1948]; sat>63000",
+                    "structure_norm": f"structure / (full_mean - edge_med), heavy-tail cap, records with "
+                                      f"signal < {MIN_SIGNAL_NORM} ADU excluded; FAST+SLOW pooled for "
+                                      f"{', '.join(POOL_MODES_FOR_NORM)}"},
            "per_detector": derived, "shutter": shutter, "ccd_temp": ccd}
     json.dump(out, open(OUT_JSON, "w"), indent=1)
     with open(OUT_CSV, "w", newline="") as fh:

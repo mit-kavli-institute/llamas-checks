@@ -133,7 +133,7 @@ on a bias means the frame is not usable as a bias, not that one detector is nois
 |---|---|---|
 | Shutter vs requested time | shutter stuck open, exposure aborted or truncated | **FAIL** |
 | Edge stripe saturated | light flooding the unilluminated edge of the detector: a railed or grossly overexposed frame | **FAIL** (every frame type, incl. science) |
-| Row / column structure | banding, bars, a warming glow | bias/dark: WARN above the detector's cap, **FAIL** above 4× the cap; LDLS and ThAr (fixed lamp): **FAIL** above the cap; sky flats: WARN |
+| Row / column structure | banding, bars, a warming glow | bias/dark: WARN above the detector's cap, **FAIL** above 4× the cap; LDLS: **FAIL** above the cap; ThAr arcs: **FAIL** above the cap on structure ÷ lamp signal (exposure-independent); sky flats: WARN |
 | Saturation | light leak or saturated pixels (above 63000 ADU) | WARN above the detector's cap; bias/dark **FAIL** above 1 % of the frame |
 | CCD temperature — warm / hot / shut-off | cooling degrading or failed | WARN / **FAIL** / **FAIL** |
 | Background level and read noise | bias-level drift, excess noise | WARN |
@@ -146,6 +146,13 @@ on a bias means the frame is not usable as a bias, not that one detector is nois
   MAD-based robust sigma. Hot pixels, hot-column fragments and cosmic rays therefore do not move
   them; whole-row/column banding, bars and glow gradients do. (Until 2026-09 these used plain
   means and a plain std, and a ~20-pixel saturated cluster could FAIL an otherwise perfect bias.)
+- On ThAr arcs the structure *is* the line pattern, so the raw metric grows with the lamp signal
+  (exposure time). The arc rules therefore use structure **divided by the lamp signal** (full-frame
+  mean minus the unilluminated bottom-stripe median), which gives the same number for a 0.07 s
+  and a 1 s arc of the same lamp; the caps come from all 39 baseline arcs regardless of readout
+  mode. Before this (2026-10) the fast-mode caps encoded the 0.07–0.4 s baseline exposures and a
+  perfectly good 1 s fast arc failed on every camera. The rule SKIPs on a detector with less than
+  2 ADU of signal.
 - The structure limits are set separately for each detector and are deliberately generous:
   naturally structured detectors (4.A.Red's left-edge glow, 3.A.Blue's fixed banding) and red
   ThAr arcs that normally saturate pass comfortably. On LDLS flats the red detectors are commonly

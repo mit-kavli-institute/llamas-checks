@@ -104,6 +104,15 @@ level_leaf = lambda e: {"med_min": e["full_level"]["med_min"], "med_max": e["ful
 struct_leaf = lambda e: {"row_max": e["structure"]["row_max"], "col_max": e["structure"]["col_max"],
                          "row_fail_max": STRUCT_FAIL_FACTOR * e["structure"]["row_max"],
                          "col_fail_max": STRUCT_FAIL_FACTOR * e["structure"]["col_max"]}
+# signal-normalised structure (structure / lamp signal, dimensionless): no gross tier
+struct_norm_leaf = lambda e: {"row_max": e["structure_norm"]["row_max"],
+                              "col_max": e["structure_norm"]["col_max"]}
+# Rule sets whose structure rules use the normalised metric. The ThAr line
+# pattern IS the structure and scales with lamp signal (exposure time), so the
+# absolute caps only encoded the baseline exposures (FAST arcs 0.07-0.4 s, SLOW
+# 1 s) and a perfectly good 1 s FAST arc failed on every camera.
+NORMALISED_STRUCTURE_SETS = {"ARC_THAR"}
+MIN_SIGNAL_NORM = 2.0   # ADU above the edge stripe; fainter -> rule SKIPs
 sat_leaf = lambda e: {"frac_max": e["sat_frac_max"]}
 
 KEYS = [{"from": "extension.name"}, {"from": "metadata.readout_mode"}]
@@ -129,6 +138,11 @@ def base_blocks():
             "saturated_fraction": {"type": "fraction_above", "threshold": 63000},
             "row_banding": {"type": "row_structure"},
             "column_banding": {"type": "column_structure"},
+            # lamp frames: structure / (full-frame mean - bottom-stripe median)
+            "row_banding_norm": {"type": "row_structure_norm",
+                                 "background_region": "bottom_stripe", "min_signal": MIN_SIGNAL_NORM},
+            "column_banding_norm": {"type": "column_structure_norm",
+                                    "background_region": "bottom_stripe", "min_signal": MIN_SIGNAL_NORM},
             # camera-warming: quarter-block median gradient / exposure time (ADU/s)
             "background_gradient_rate": {"type": "background_gradient_rate",
                                          "exptime_keys": ["SEXPTIME", "REXPTIME", "EXPTIME"],
@@ -249,14 +263,17 @@ def level_rules(table, severity="WARN"):
     ]
 
 
-def struct_rules(table, severity, gross=False):
+def struct_rules(table, severity, gross=False, normalised=False):
     """Row/column banding at the per-detector cap with ``severity``; with ``gross``
-    also the FAIL tier at STRUCT_FAIL_FACTOR x cap (fields row_fail_max/col_fail_max)."""
+    also the FAIL tier at STRUCT_FAIL_FACTOR x cap (fields row_fail_max/col_fail_max).
+    ``normalised`` uses the signal-normalised metrics (rule names unchanged)."""
+    row_metric, col_metric = (("row_banding_norm", "column_banding_norm") if normalised
+                              else ("row_banding", "column_banding"))
     rules = [
-        {"name": "row_structure", "region": "full_frame", "metric": "row_banding",
+        {"name": "row_structure", "region": "full_frame", "metric": row_metric,
          "per_extension": True, "severity": severity,
          "expected_from_lookup": {"table": table, "keys": KEYS, "max_field": "row_max"}},
-        {"name": "column_structure", "region": "full_frame", "metric": "column_banding",
+        {"name": "column_structure", "region": "full_frame", "metric": col_metric,
          "per_extension": True, "severity": severity,
          "expected_from_lookup": {"table": table, "keys": KEYS, "max_field": "col_max"}},
     ]
@@ -298,7 +315,9 @@ def build_cal_config():
     # uniform frames (bias/dark): frame-level band, structure WARN at cap + FAIL at
     #   STRUCT_FAIL_FACTOR x cap, saturation WARN at cap + FAIL above SAT_GROSS_UNIFORM;
     # fixed-lamp frames (LDLS, ThAr): structure FAIL at the heavy-tail cap (~1.5x the worst
-    #   normal frame; only a gross anomaly such as the 2026-07-10 odd arcs trips it);
+    #   normal frame; only a gross anomaly such as the 2026-07-10 odd arcs trips it). For
+    #   ThAr (NORMALISED_STRUCTURE_SETS) the metric is structure / lamp signal, so the cap
+    #   does not depend on the exposure time the observer chose;
     # twilight sky flats: structure WARN only (the metric scales with sky brightness).
     # Every set gets edge_saturated FAIL.
     types = [("CAL.R-BIA", "BIAS", True, "WARN"), ("CAL.R-DRK", "DARK", True, "WARN"),
@@ -306,8 +325,9 @@ def build_cal_config():
              ("CAL.R-ARC", "ARC_THAR", False, "FAIL")]
     for pc, setname, uniform, struct_sev in types:
         eb, st, sa = f"edge_bg_{setname}", f"struct_{setname}", f"sat_{setname}"
+        normalised = setname in NORMALISED_STRUCTURE_SETS
         lookup[eb] = build_table(pc, edge_leaf)
-        lookup[st] = build_table(pc, struct_leaf)
+        lookup[st] = build_table(pc, struct_norm_leaf if normalised else struct_leaf)
         lookup[sa] = build_table(pc, sat_leaf)
         rules = [shutter_rule(pc), edge_bg_rule(eb, "WARN"), edge_sat_rule()]
         if uniform:
@@ -316,7 +336,7 @@ def build_cal_config():
             rules += struct_rules(st, struct_sev, gross=True)
             rules += [sat_rule(sa, "WARN"), sat_gross_rule()]
         else:
-            rules += struct_rules(st, struct_sev)
+            rules += struct_rules(st, struct_sev, normalised=normalised)
             rules += [sat_rule(sa, "WARN")]
         rules += temp_rules()
         rule_sets[setname] = {"applies_when": {"exposure_type": pc}, "rules": rules}
@@ -374,7 +394,8 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
 
     hdr = ("# LLAMAS %s QA config -- GENERATED from robust baseline analysis "
-           "(2026-04-07/05-02/06-30; trimmed-mean structure profiles + MAD rms, WARN/FAIL tiers, 2026-09). "
+           "(2026-04-07/05-02/06-30; trimmed-mean structure profiles + MAD rms, WARN/FAIL tiers, 2026-09; "
+           "ThAr structure normalised by lamp signal, 2026-10). "
            "See docs/QA_CHECKS_CATALOGUE.md; regenerate via scripts/gen_configs.py.\n")
     dump(build_cal_config(), os.path.join(args.out_dir, "qa_config_cal.yaml"), hdr % "calibration")
     dump(build_science_config(), os.path.join(args.out_dir, "qa_config_science.yaml"), hdr % "science")

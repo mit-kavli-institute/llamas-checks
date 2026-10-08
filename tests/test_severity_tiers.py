@@ -265,6 +265,36 @@ def test_shipped_illuminated_structure_severities(cal_cfg):
         assert rules_of(cal_cfg, rule_set)["saturation_fraction"]["severity"] == "WARN"
 
 
+def test_shipped_arc_structure_is_signal_normalised(cal_cfg):
+    """ThAr structure is structure / lamp signal (exposure-independent); every other
+    set keeps the absolute metric. Caps are dimensionless and mode-independent."""
+    arc = rules_of(cal_cfg, "ARC_THAR")
+    assert arc["row_structure"]["metric"] == "row_banding_norm"
+    assert arc["column_structure"]["metric"] == "column_banding_norm"
+    for rule_set in ("BIAS", "DARK", "LDLS_FLAT", "SKY_FLAT"):
+        assert rules_of(cal_cfg, rule_set)["row_structure"]["metric"] == "row_banding"
+        assert rules_of(cal_cfg, rule_set)["column_structure"]["metric"] == "column_banding"
+    for name, mtype in (("row_banding_norm", "row_structure_norm"),
+                        ("column_banding_norm", "column_structure_norm")):
+        metric = cal_cfg["metrics"][name]
+        assert metric["type"] == mtype
+        assert metric["background_region"] == "bottom_stripe"
+        assert metric["min_signal"] == 2.0
+    table = cal_cfg["lookup_tables"]["struct_ARC_THAR"]
+    assert len(table) == 24
+    for detector, modes in table.items():
+        assert set(modes) == {"FAST", "SLOW"}, detector
+        assert modes["FAST"] == modes["SLOW"], detector
+        assert 0.0 < modes["FAST"]["col_max"] < 3.0, detector
+        assert "row_fail_max" not in modes["FAST"]
+        if detector == "3.A.Blue":
+            # 3.A.Blue carries ~1415 ADU of fixed row banding on every arc, independent
+            # of the lamp, so its normalised row cap is open (the column rule still works)
+            assert modes["FAST"]["row_max"] > 10.0
+        else:
+            assert 0.0 < modes["FAST"]["row_max"] < 1.0, detector
+
+
 def test_every_shipped_rule_set_has_edge_saturated_fail(cal_cfg, sci_cfg):
     for cfg in (cal_cfg, sci_cfg):
         for rule_set in cfg["rule_sets"]:

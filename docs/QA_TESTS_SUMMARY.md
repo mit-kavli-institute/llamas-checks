@@ -127,7 +127,8 @@ off-mode lookups → SKIPPED. Background/level/RMS are **WARN** (drift & warm mo
 doc's requirement is to *track* bias level and its drift; **row/column structure is `FAIL` on
 every cal type** (bias, dark, LDLS flat, sky flat, arc) — odd/anomalous structure must alert the
 observer. All background/structure/saturation limits are per-detector (`extension.name`) ×
-`readout_mode`.
+`readout_mode`, except the arc structure caps, which are normalised by lamp signal and shared by
+both readout modes (see the ARC note below).
 
 ### BIAS (`CAL.R-BIA`)
 | Rule | Region / source | Metric | Threshold | Sev | Flags |
@@ -156,10 +157,21 @@ Row/column structure is **FAIL** even though these frames carry real fibre/line 
 because the per-detector caps are heavy-tail (≈1.5× the worst normal frame): every normal
 illuminated frame sits at ≤0.67× its cap, so only a **gross odd-structure anomaly** trips it.
 Validated across **115 normal illuminated frames** (39 baseline arcs + 16 normal 2026-07-10
-commissioning arcs + 36 LDLS + 24 twilight) → **0 breaches**; the anomalous 2026-07-10 arcs sit
+commissioning arcs + 36 LDLS + 24 twilight) → **0 breaches**; the anomalous 2026-07-10 arcs sat
 at **1.8–3.0× cap on all 22 detectors** → FAIL. Saturation is deliberately **not** the
 discriminator here: normal red ThAr arcs already saturate (p99 ≈ 65535), so only structure
 cleanly separates the defect.
+
+**ThAr arcs, 2026-10 revision.** The absolute arc metric scales with the lamp signal, and every
+FAST baseline arc was 0.07–0.4 s while every SLOW one was 1 s, so the FAST caps encoded exposure
+time: two good 1 s FAST arcs of 2026-10-07 failed 34 structure checks each while 1 s SLOW arcs with
+the same values passed. The ARC_THAR rules now use `row_structure_norm` / `column_structure_norm`
+= structure ÷ (full-frame mean − bottom-stripe median), caps from all 39 baseline arcs pooled over
+readout mode (ratio spread on a red row 0.06–0.16, cap 0.23; on a green row 0.23–0.30, cap 0.44).
+The 1 s FAST arcs sit at ≤ 0.7× cap; the 2026-07-10 odd arc `20-22-43.7` (streaked red lines) still
+FAILs at 1.3–1.75× cap on five red rows, while its over-bright but unstreaked successor `20-22-58.8`
+drops to WARN (0.85× cap). The rule SKIPs on a detector with < 2 ADU of signal. 3.A.Blue's fixed
+~1415 ADU row banding is lamp-independent, so its normalised row cap is open.
 
 ### SCIENCE (`SCI.R-*`)
 | Rule | Source | Threshold | Sev |

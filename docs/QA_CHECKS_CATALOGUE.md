@@ -63,7 +63,7 @@ config and writes a `<frame>.qa.json` beside every frame; its exit codes are 0 =
 | DARK | `CAL.R-DRK` | SLOW | 600 s |
 | LDLS_FLAT | `CAL.R-FLT` | FAST | 0.07–0.5 s |
 | SKY_FLAT | `CAL.R-SKY` | FAST, SLOW | 1–60 s |
-| ARC_THAR | `CAL.R-ARC` | FAST, SLOW | 0.05–1 s |
+| ARC_THAR | `CAL.R-ARC` | FAST, SLOW | 0.05–1 s (baselines: FAST 0.07–0.4 s, SLOW 1 s) |
 | SCIENCE | `SCI.R-*` (e.g. `SCI.R-SL`, `SCI.R-DT`) | any (no per-mode tables) | varies |
 
 - `OBJECT` is never used for selection. The readout mode comes from `READ-MDE`.
@@ -134,7 +134,7 @@ Identical to BIAS with the DARK tables; shutter abs tolerance 0.238 s.
 | `shutter_exptime_consistency` | \|SEXPTIME − REXPTIME\| | abs 0.252 s (LDLS) / 0.328 s (ARC) **or** rel 10 % | FAIL |
 | `edge_background_level` | median of `bottom_stripe` | band, per det × mode | WARN |
 | `edge_saturated` | median of `bottom_stripe` | ≤ 63000 ADU | FAIL |
-| `row_structure` / `column_structure` | banding amplitude of `full_frame` | ≤ heavy-tail cap, per det × mode | FAIL |
+| `row_structure` / `column_structure` | LDLS: banding amplitude of `full_frame` (ADU); ARC: banding amplitude ÷ lamp signal (full-frame mean − `bottom_stripe` median), dimensionless, SKIPPED below 2 ADU of signal | ≤ heavy-tail cap, per det × mode (ARC: one cap for both modes) | FAIL |
 | `saturation_fraction` | fraction > 63000 ADU | ≤ frac_max, per det × mode | WARN |
 | `ccd_temperature_warm` / `_hot` / `_shutoff` | `CCDTEMP*` per extension | as BIAS | WARN / FAIL / FAIL |
 
@@ -148,7 +148,13 @@ the caps).
 No `frame_level_median` or `frame_noise_rms` on illuminated frames: the level scales with exposure
 time, so a fixed band is not physical. The structure caps for these types are deliberately loose
 (1.5 × the worst normal frame, see §5) so real fibre and line structure passes; only a gross
-anomaly trips them. LDLS exposure times are the observer's choice (the calibration script
+anomaly trips them. On ThAr arcs the structure metric is the line pattern itself and grows with
+the lamp signal, so since 2026-10 the ARC rules use structure **divided by the lamp signal**
+(full-frame mean − bottom-stripe median) with caps pooled over both readout modes: the earlier
+absolute fast-mode caps came from 0.07–0.4 s baseline arcs and failed good 1 s fast arcs on
+every camera (2026-10-07 `18-13-44.0` / `18-52-02.0`, 34 FAILs each). 3.A.Blue carries ~1415 ADU
+of fixed row banding on every arc regardless of the lamp, so its normalised row cap is open
+(106); its column rule still applies. LDLS exposure times are the observer's choice (the calibration script
 suggests 0.07 / 0.15 / 0.3 / 0.5 s and most nights use it, but nothing enforces it); at the
 longer exposures taken for the blue channel the red detectors rail over most of the fibre area,
 so red saturation is not a defect on an LDLS flat and the per-detector red saturation caps,
@@ -275,7 +281,9 @@ overhead is what the absolute tolerance is for; the 10 % rule alone would fail e
 
 Row/column banding measured with the 2 %-trimmed-mean profile. On a uniform frame (bias, dark) the
 WARN caps are near the 2.0 ADU floor and the FAIL tier is 4 × the cap; on fixed-lamp illuminated
-frames (LDLS, ThAr) the heavy-tail cap (1.5 × the worst normal frame) is itself the FAIL.
+frames (LDLS, ThAr) the heavy-tail cap (1.5 × the worst normal frame) is itself the FAIL. On ThAr
+arcs the quantity capped is structure ÷ lamp signal (see §2), so the numbers below for arcs are
+dimensionless.
 
 **Dark with periodic column bars on 2.B.Green** — `BASE/Darks/LLAMAS_2026-06-04_20-36-33.1_CAL22_mef.fits`
 (DARK, SLOW, 600 s; shutter nominal 600 → 600.002 s). Held out of the threshold derivation.
@@ -290,17 +298,24 @@ Result: `FAIL: 1 fail check(s): column_structure_gross@2.B.Green`, exit 2. The 1
 structure" that the plain-mean metric also flagged on this frame (4.11 vs 2.0) was hot pixels: with
 the trimmed profile it measures 0.14 and passes, which is the intended behaviour.
 
-**Commissioning ThAr arcs with banding on every camera and red blooming** — two consecutive frames:
+**Commissioning ThAr arc with red blooming** — `COMM/LLAMAS_2026-07-10_20-22-43.7_CAL22_mef.fits`
+(ARC_THAR, FAST, SEXPTIME 0.074 s but carrying the signal of a ~2 s arc; the red lines are smeared
+into vertical streaks). With the signal-normalised metric (2026-10) it FAILs `row_structure` on
+five red cameras (1.A.Red 0.42 vs cap 0.26, 1.B.Red 0.40 vs 0.23, 3.A.Red 0.43 vs 0.34, 3.B.Red
+0.43 vs 0.25, 4.B.Red 0.42 vs 0.24; the baseline arcs never exceed 0.22 on a red row) plus the
+edge-background and red saturation WARNs. Result: **FAIL**, exit 2. (Under the earlier absolute
+caps it failed 43 checks on all 22 detectors, as did the next frame, because both were far
+brighter than the 0.07–0.4 s baseline arcs.)
 
-| frame | column FAIL | row FAIL | excess over cap | other |
-|---|---|---|---|---|
-| `COMM/LLAMAS_2026-07-10_20-22-43.7_CAL22_mef.fits` (ARC_THAR, FAST, 0.07 s) | 22 / 22 detectors (e.g. 1.A.Green 79.0 vs 34.3; 3.B.Blue 165.7 vs 69.4; 1.B.Red 8514 vs 3569) | 21 / 22 | 2.2–12.6 × | edge-background WARN on 4.A.Red, saturation WARN on the reds |
-| `COMM/LLAMAS_2026-07-10_20-22-58.8_CAL22_mef.fits` (ARC_THAR, FAST) | 22 / 22 (1.A.Green 99.8; 3.B.Blue 204.2; 1.B.Red 7382) | 21 / 22 | 1.3–5.4 × | edge-background WARN on all 8 reds, saturation WARN on the reds |
-
-Result for both: **FAIL**, exit 2 (43 FAIL checks each).
+The next frame, `COMM/LLAMAS_2026-07-10_20-22-58.8_CAL22_mef.fits` (FAST, SEXPTIME 0.178 s, again
+with the signal of a multi-second arc), has thick saturated lines but no streaking; its normalised
+structure sits at 0.85–0.88 × cap on the red rows, so it now comes back **WARN** (red saturation
+and edge-background warnings) rather than FAIL. Overexposure alone is not what the structure rule
+is for; the saturation WARN carries that.
 
 Counter-example, same sequence, 15 s earlier: `COMM/LLAMAS_2026-07-10_20-22-28.7_CAL22_mef.fits`
-passes 111 / 111 evaluated checks (exit 0). The 26 ThAr arcs of 2026-09-06/07 all pass as well.
+passes 135 / 135 evaluated checks (exit 0, with `--cameras-down 1.A.Blue,4.A.Blue`). The 26 ThAr
+arcs of 2026-09-06/07 pass the structure rules as well.
 
 ### 6.3 Camera warming → WARN (exit 1)
 

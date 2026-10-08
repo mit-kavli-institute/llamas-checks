@@ -1,4 +1,4 @@
-# LLAMAS science QA config -- GENERATED from robust baseline analysis (2026-04-07/05-02/06-30; trimmed-mean structure profiles + MAD rms, WARN/FAIL tiers, 2026-09). See docs/QA_CHECKS_CATALOGUE.md; regenerate via scripts/gen_configs.py.
+# LLAMAS science QA config -- GENERATED from robust baseline analysis (2026-04-07/05-02/06-30; trimmed-mean structure profiles + MAD rms, WARN/FAIL tiers, 2026-09; ThAr structure normalised by lamp signal, 2026-10). See docs/QA_CHECKS_CATALOGUE.md; regenerate via scripts/gen_configs.py.
 config_version: '1.0'
 instrument:
   name: LLAMAS
@@ -154,6 +154,14 @@ metrics:
     type: row_structure
   column_banding:
     type: column_structure
+  row_banding_norm:
+    type: row_structure_norm
+    background_region: bottom_stripe
+    min_signal: 2.0
+  column_banding_norm:
+    type: column_structure_norm
+    background_region: bottom_stripe
+    min_signal: 2.0
   background_gradient_rate:
     type: background_gradient_rate
     exptime_keys:

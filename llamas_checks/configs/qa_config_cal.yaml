@@ -1,4 +1,4 @@
-# LLAMAS calibration QA config -- GENERATED from robust baseline analysis (2026-04-07/05-02/06-30; trimmed-mean structure profiles + MAD rms, WARN/FAIL tiers, 2026-09). See docs/QA_CHECKS_CATALOGUE.md; regenerate via scripts/gen_configs.py.
+# LLAMAS calibration QA config -- GENERATED from robust baseline analysis (2026-04-07/05-02/06-30; trimmed-mean structure profiles + MAD rms, WARN/FAIL tiers, 2026-09; ThAr structure normalised by lamp signal, 2026-10). See docs/QA_CHECKS_CATALOGUE.md; regenerate via scripts/gen_configs.py.
 config_version: '1.0'
 instrument:
   name: LLAMAS
@@ -154,6 +154,14 @@ metrics:
     type: row_structure
   column_banding:
     type: column_structure
+  row_banding_norm:
+    type: row_structure_norm
+    background_region: bottom_stripe
+    min_signal: 2.0
+  column_banding_norm:
+    type: column_structure_norm
+    background_region: bottom_stripe
+    min_signal: 2.0
   background_gradient_rate:
     type: background_gradient_rate
     exptime_keys:
@@ -2512,268 +2520,172 @@ lookup_tables:
   struct_ARC_THAR:
     1.A.Red:
       FAST:
-        row_max: 180.8352
-        col_max: 2077.8238
-        row_fail_max: 723.3408
-        col_fail_max: 8311.2952
+        row_max: 0.2571
+        col_max: 1.7189
       SLOW:
-        row_max: 417.1484
-        col_max: 2787.5453
-        row_fail_max: 1668.5936
-        col_fail_max: 11150.1812
+        row_max: 0.2571
+        col_max: 1.7189
     1.A.Green:
       FAST:
-        row_max: 19.683
-        col_max: 34.2573
-        row_fail_max: 78.732
-        col_fail_max: 137.0292
+        row_max: 0.443
+        col_max: 0.6139
       SLOW:
-        row_max: 41.5788
-        col_max: 68.4073
-        row_fail_max: 166.3152
-        col_fail_max: 273.6292
+        row_max: 0.443
+        col_max: 0.6139
     1.A.Blue:
       FAST:
-        row_max: 32.0256
-        col_max: 55.2321
-        row_fail_max: 128.1024
-        col_fail_max: 220.9284
+        row_max: 0.5371
+        col_max: 1.0079
       SLOW:
-        row_max: 62.6712
-        col_max: 109.3476
-        row_fail_max: 250.6848
-        col_fail_max: 437.3904
+        row_max: 0.5371
+        col_max: 1.0079
     1.B.Red:
       FAST:
-        row_max: 217.9082
-        col_max: 3568.6064
-        row_fail_max: 871.6328
-        col_fail_max: 14274.4256
+        row_max: 0.2336
+        col_max: 2.2146
       SLOW:
-        row_max: 621.5149
-        col_max: 5228.846
-        row_fail_max: 2486.0596
-        col_fail_max: 20915.384
+        row_max: 0.2336
+        col_max: 2.2146
     1.B.Green:
       FAST:
-        row_max: 33.2456
-        col_max: 52.9871
-        row_fail_max: 132.9824
-        col_fail_max: 211.9484
+        row_max: 0.4633
+        col_max: 0.6626
       SLOW:
-        row_max: 65.9574
-        col_max: 103.4207
-        row_fail_max: 263.8296
-        col_fail_max: 413.6828
+        row_max: 0.4633
+        col_max: 0.6626
     1.B.Blue:
       FAST:
-        row_max: 23.2644
-        col_max: 50.6553
-        row_fail_max: 93.0576
-        col_fail_max: 202.6212
+        row_max: 0.5173
+        col_max: 1.0884
       SLOW:
-        row_max: 45.8414
-        col_max: 98.671
-        row_fail_max: 183.3656
-        col_fail_max: 394.684
+        row_max: 0.5173
+        col_max: 1.0884
     2.A.Red:
       FAST:
-        row_max: 603.1754
-        col_max: 3278.6296
-        row_fail_max: 2412.7016
-        col_fail_max: 13114.5184
+        row_max: 0.4273
+        col_max: 2.0793
       SLOW:
-        row_max: 837.5976
-        col_max: 4331.1349
-        row_fail_max: 3350.3904
-        col_fail_max: 17324.5396
+        row_max: 0.4273
+        col_max: 2.0793
     2.A.Green:
       FAST:
-        row_max: 31.4287
-        col_max: 41.8558
-        row_fail_max: 125.7148
-        col_fail_max: 167.4232
+        row_max: 0.6224
+        col_max: 0.6636
       SLOW:
-        row_max: 61.602
-        col_max: 84.3156
-        row_fail_max: 246.408
-        col_fail_max: 337.2624
+        row_max: 0.6224
+        col_max: 0.6636
     2.A.Blue:
       FAST:
-        row_max: 28.3661
-        col_max: 55.2321
-        row_fail_max: 113.4644
-        col_fail_max: 220.9284
+        row_max: 0.5139
+        col_max: 0.9603
       SLOW:
-        row_max: 55.3577
-        col_max: 109.3476
-        row_fail_max: 221.4308
-        col_fail_max: 437.3904
+        row_max: 0.5139
+        col_max: 0.9603
     2.B.Red:
       FAST:
-        row_max: 584.2526
-        col_max: 3463.1028
-        row_fail_max: 2337.0104
-        col_fail_max: 13852.4112
+        row_max: 0.4902
+        col_max: 2.501
       SLOW:
-        row_max: 865.8461
-        col_max: 4908.2441
-        row_fail_max: 3463.3844
-        col_fail_max: 19632.9764
+        row_max: 0.4902
+        col_max: 2.501
     2.B.Green:
       FAST:
-        row_max: 43.5358
-        col_max: 52.086
-        row_fail_max: 174.1432
-        col_fail_max: 208.344
+        row_max: 0.6513
+        col_max: 0.9124
       SLOW:
-        row_max: 79.2916
-        col_max: 96.6519
-        row_fail_max: 317.1664
-        col_fail_max: 386.6076
+        row_max: 0.6513
+        col_max: 0.9124
     2.B.Blue:
       FAST:
-        row_max: 27.3458
-        col_max: 49.8052
-        row_fail_max: 109.3832
-        col_fail_max: 199.2208
+        row_max: 0.5444
+        col_max: 0.9783
       SLOW:
-        row_max: 53.0144
-        col_max: 96.8682
-        row_fail_max: 212.0576
-        col_fail_max: 387.4728
+        row_max: 0.5444
+        col_max: 0.9783
     3.A.Red:
       FAST:
-        row_max: 300.9748
-        col_max: 2708.0747
-        row_fail_max: 1203.8992
-        col_fail_max: 10832.2988
+        row_max: 0.3362
+        col_max: 1.8917
       SLOW:
-        row_max: 582.6476
-        col_max: 3094.4329
-        row_fail_max: 2330.5904
-        col_fail_max: 12377.7316
+        row_max: 0.3362
+        col_max: 1.8917
     3.A.Green:
       FAST:
-        row_max: 34.3895
-        col_max: 38.9679
-        row_fail_max: 137.558
-        col_fail_max: 155.8716
+        row_max: 0.6009
+        col_max: 0.6306
       SLOW:
-        row_max: 70.2818
-        col_max: 79.6153
-        row_fail_max: 281.1272
-        col_fail_max: 318.4612
+        row_max: 0.6009
+        col_max: 0.6306
     3.A.Blue:
       FAST:
-        row_max: 2123.0597
-        col_max: 50.8189
-        row_fail_max: 8492.2388
-        col_fail_max: 203.2756
+        row_max: 106.3276
+        col_max: 1.2128
       SLOW:
-        row_max: 2152.9943
-        col_max: 101.5939
-        row_fail_max: 8611.9772
-        col_fail_max: 406.3756
+        row_max: 106.3276
+        col_max: 1.2128
     3.B.Red:
       FAST:
-        row_max: 211.5088
-        col_max: 3763.3375
-        row_fail_max: 846.0352
-        col_fail_max: 15053.35
+        row_max: 0.245
+        col_max: 2.3943
       SLOW:
-        row_max: 630.0225
-        col_max: 5038.105
-        row_fail_max: 2520.09
-        col_fail_max: 20152.42
+        row_max: 0.245
+        col_max: 2.3943
     3.B.Green:
       FAST:
-        row_max: 41.0523
-        col_max: 56.1379
-        row_fail_max: 164.2092
-        col_fail_max: 224.5516
+        row_max: 0.5859
+        col_max: 0.7874
       SLOW:
-        row_max: 79.7162
-        col_max: 108.9111
-        row_fail_max: 318.8648
-        col_fail_max: 435.6444
+        row_max: 0.5859
+        col_max: 0.7874
     3.B.Blue:
       FAST:
-        row_max: 34.846
-        col_max: 69.4375
-        row_fail_max: 139.384
-        col_fail_max: 277.75
+        row_max: 0.5371
+        col_max: 1.0079
       SLOW:
-        row_max: 69.5845
-        col_max: 135.4908
-        row_fail_max: 278.338
-        col_fail_max: 541.9632
+        row_max: 0.5371
+        col_max: 1.0079
     4.A.Red:
       FAST:
-        row_max: 708.2349
-        col_max: 3087.3394
-        row_fail_max: 2832.9396
-        col_fail_max: 12349.3576
+        row_max: 0.682
+        col_max: 2.0795
       SLOW:
-        row_max: 953.4854
-        col_max: 4028.8346
-        row_fail_max: 3813.9416
-        col_fail_max: 16115.3384
+        row_max: 0.682
+        col_max: 2.0795
     4.A.Green:
       FAST:
-        row_max: 24.0357
-        col_max: 45.795
-        row_fail_max: 96.1428
-        col_fail_max: 183.18
+        row_max: 0.369
+        col_max: 0.6534
       SLOW:
-        row_max: 48.5941
-        col_max: 94.3612
-        row_fail_max: 194.3764
-        col_fail_max: 377.4448
+        row_max: 0.369
+        col_max: 0.6534
     4.A.Blue:
       FAST:
-        row_max: 32.0256
-        col_max: 55.2321
-        row_fail_max: 128.1024
-        col_fail_max: 220.9284
+        row_max: 0.5371
+        col_max: 1.0079
       SLOW:
-        row_max: 62.6712
-        col_max: 109.3476
-        row_fail_max: 250.6848
-        col_fail_max: 437.3904
+        row_max: 0.5371
+        col_max: 1.0079
     4.B.Red:
       FAST:
-        row_max: 220.2989
-        col_max: 3187.7263
-        row_fail_max: 881.1956
-        col_fail_max: 12750.9052
+        row_max: 0.238
+        col_max: 2.2991
       SLOW:
-        row_max: 465.5412
-        col_max: 3604.914
-        row_fail_max: 1862.1648
-        col_fail_max: 14419.656
+        row_max: 0.238
+        col_max: 2.2991
     4.B.Green:
       FAST:
-        row_max: 46.5644
-        col_max: 52.5158
-        row_fail_max: 186.2576
-        col_fail_max: 210.0632
+        row_max: 0.6135
+        col_max: 0.6472
       SLOW:
-        row_max: 93.5251
-        col_max: 106.0287
-        row_fail_max: 374.1004
-        col_fail_max: 424.1148
+        row_max: 0.6135
+        col_max: 0.6472
     4.B.Blue:
       FAST:
-        row_max: 32.0256
-        col_max: 66.5037
-        row_fail_max: 128.1024
-        col_fail_max: 266.0148
+        row_max: 0.5035
+        col_max: 0.9913
       SLOW:
-        row_max: 62.6712
-        col_max: 133.174
-        row_fail_max: 250.6848
-        col_fail_max: 532.696
+        row_max: 0.5035
+        col_max: 0.9913
   sat_ARC_THAR:
     1.A.Red:
       FAST:
@@ -3401,7 +3313,7 @@ rule_sets:
         max: 63000.0
     - name: row_structure
       region: full_frame
-      metric: row_banding
+      metric: row_banding_norm
       per_extension: true
       severity: FAIL
       expected_from_lookup:
@@ -3410,7 +3322,7 @@ rule_sets:
         max_field: row_max
     - name: column_structure
       region: full_frame
-      metric: column_banding
+      metric: column_banding_norm
       per_extension: true
       severity: FAIL
       expected_from_lookup:
