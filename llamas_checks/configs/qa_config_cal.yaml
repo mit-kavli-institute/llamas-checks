@@ -2939,13 +2939,20 @@ rule_sets:
       exposure_type: CAL.R-BIA
     rules:
     - name: shutter_exptime_consistency
-      severity: FAIL
+      severity: WARN
       header_check:
         op: abs_or_rel_diff
         source: SEXPTIME
         other: REXPTIME
         abs_tol: 0.214
         rel_tol: 0.1
+    - name: shutter_exptime_gross
+      severity: FAIL
+      header_check:
+        op: range
+        source: SEXPTIME
+        limits:
+          max: 0.5
     - name: edge_background_level
       region: bottom_stripe
       metric: median

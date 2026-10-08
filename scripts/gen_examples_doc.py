@@ -129,6 +129,10 @@ CASES = {
          "LLAMAS_2026-05-06_06-08-21.4_SCI22_mef.fits", "WARN (camera_warming_gradient @ 3.A.Green)",
          "Dark-current glow growing at ~2.1 ADU/s on 3.A.Green while the header CCD temperature "
          "still reads its baseline value. Advisory: check the camera."),
+        ("fail_shutter_bias", "Bias with shutter lag (was FAIL)", "warm",
+         "LLAMAS_2026-05-06_05-56-30.7_CAL0_mef.fits", "FAIL (shutter_exptime_consistency)",
+         "SEXPTIME 0.352 s for a 0.001 s bias: shutter lag beyond the 0.214 s tolerance is WARN "
+         "(the frame is still a usable bias); only an actual SEXPTIME above 0.5 s FAILs."),
     ],
     "FAIL": [
         ("fail_ldls_railed_all", "LDLS flat, 0.07 s, railed on every detector", "sept07",
@@ -152,9 +156,6 @@ CASES = {
         ("fail_shutter_science", "Science frame with a shutter fault (600 s requested)", "warm",
          "LLAMAS_2026-05-06_05-10-56.6_SCI22_mef.fits", "FAIL (shutter_exptime_consistency)",
          "SEXPTIME 181 s against REXPTIME 600 s: the shutter closed early."),
-        ("fail_shutter_bias", "Bias with the shutter open", "warm",
-         "LLAMAS_2026-05-06_05-56-30.7_CAL0_mef.fits", "FAIL (shutter_exptime_consistency)",
-         "SEXPTIME 0.352 s for a 0.001 s bias: not a bias."),
         ("fail_ldls_baseline_overrun", "Baseline LDLS flat with a shutter overrun (June 30)", "baselines",
          "lamp_flats/LLAMAS_2026-06-30_19-33-58.0_CAL22_mef.fits", "PASS (undetected)",
          "REXPTIME 0.15 s but SEXPTIME 0.246 s (inside the shutter tolerance), leaving the red "

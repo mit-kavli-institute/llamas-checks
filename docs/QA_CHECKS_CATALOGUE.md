@@ -106,11 +106,12 @@ cosmic rays since 2026-09):
 - **robust rms** — 1.4826 × median absolute deviation of the pixels (read noise).
 - **median**, **fraction > 63000 ADU** — as named.
 
-### BIAS (`CAL.R-BIA`) — 13 rules
+### BIAS (`CAL.R-BIA`) — 14 rules
 
 | rule | what is measured | limit | severity |
 |---|---|---|---|
-| `shutter_exptime_consistency` | \|SEXPTIME − REXPTIME\| | passes within abs 0.214 s **or** rel 10 % | FAIL |
+| `shutter_exptime_consistency` | \|SEXPTIME − REXPTIME\| | passes within abs 0.214 s **or** rel 10 % | WARN (shutter lag; the frame is still a usable bias) |
+| `shutter_exptime_gross` | SEXPTIME | ≤ 0.5 s (static) | FAIL |
 | `edge_background_level` | median of `bottom_stripe` | band [min, max], per det × mode | WARN |
 | `edge_saturated` | median of `bottom_stripe` | ≤ 63000 ADU (static) | FAIL |
 | `frame_level_median` | median of `full_frame` | band [med_min, med_max], per det × mode | WARN |
@@ -125,7 +126,8 @@ cosmic rays since 2026-09):
 
 ### DARK (`CAL.R-DRK`) — 13 rules
 
-Identical to BIAS with the DARK tables; shutter abs tolerance 0.238 s.
+Identical to BIAS with the DARK tables, except that the shutter rule is FAIL (abs tolerance
+0.238 s) and there is no `shutter_exptime_gross` tier.
 
 ### LDLS_FLAT (`CAL.R-FLT`), ARC_THAR (`CAL.R-ARC`) — 10 rules each (fixed lamp)
 
@@ -188,6 +190,7 @@ caught by the gradient *rate*, because dark current accrues per second while sky
 | gross structure factor | FAIL above 4 × the per-detector WARN cap (`*_gross`) | BIAS, DARK |
 | shutter relative tolerance | 10 % | all types |
 | shutter absolute tolerance | BIAS 0.214 s · DARK 0.238 s · LDLS 0.252 s · SKY 0.348 s · ARC 0.328 s · SCIENCE 1.0 s | per type |
+| bias shutter FAIL | SEXPTIME > 0.5 s → FAIL (`shutter_exptime_gross`); lag beyond the tolerance is WARN | BIAS |
 | camera-warming gradient rate | ≤ 1.3 ADU/s (WARN), `min_exptime` 8 s | SCIENCE |
 | CCD temperature shut-off | > −60 °C → FAIL, every camera | all types |
 | CCD temperature cold floor | −140 °C | all types |
@@ -261,17 +264,20 @@ all 24 cameras back in service) these frames FAIL on their placeholder cameras u
 `1.A.Blue` and `4.A.Blue` are listed as down (`--cameras-down 1.A.Blue,4.A.Blue`); the verdicts
 below are for the pixel and header checks alone.
 
-### 6.1 Shutter faults → FAIL (exit 2)
+### 6.1 Shutter faults → FAIL (exit 2); bias shutter lag → WARN
 
 The frame is not the exposure that was requested. `shutter_exptime_consistency` is FAIL severity on
-every frame type, so one tripped check fails the frame regardless of the pixels.
+every frame type except BIAS, so one tripped check fails the frame regardless of the pixels. On a
+bias the shutter lag routinely leaves SEXPTIME at a few ms and occasionally a few tenths of a second
+(0.002–0.337 s seen through October 2026); the frame is still a usable bias, so lag beyond the
+0.214 s tolerance is WARN and only `shutter_exptime_gross` (actual SEXPTIME > 0.5 s) FAILs it.
 
 | frame | type / mode | REXPTIME → SEXPTIME | measured Δ | tolerance | result |
 |---|---|---|---|---|---|
 | `WARM/LLAMAS_2026-05-06_05-10-56.6_SCI22_mef.fits` (ZTFJ1312p1031) | SCIENCE, SLOW | 600 → 180.946 s | 419.05 s (70 %) | 1.0 s or 10 % | **FAIL**, exit 2 |
 | `COMM/LLAMAS_2026-07-11_10-11-03.4_SCI22_mef.fits` (fiber535) | SCIENCE, SLOW | 900 → 215.807 s | 684.19 s (76 %) | 1.0 s or 10 % | **FAIL**, exit 2 |
 | `WARM/LLAMAS_2026-05-06_05-50-23.7_CAL0_mef.fits` (ThAr arc) | ARC_THAR, SLOW | 1 → 122.736 s | 121.74 s | 0.328 s or 10 % | **FAIL**, exit 2 (shutter stuck open) |
-| `WARM/LLAMAS_2026-05-06_05-56-30.7_CAL0_mef.fits` (bias) | BIAS, SLOW | 0.001 → 0.352 s | 0.351 s | 0.214 s or 10 % | **FAIL**, exit 2 |
+| `WARM/LLAMAS_2026-05-06_05-56-30.7_CAL0_mef.fits` (bias) | BIAS, SLOW | 0.001 → 0.352 s | 0.351 s | 0.214 s or 10 % (WARN); FAIL above 0.5 s | **WARN**, exit 1 (was FAIL) |
 | `BASE/lamp_flats/LLAMAS_2026-05-02_22-58-00.4_CAL22_mef.fits` | LDLS_FLAT, FAST | 0.5 → 0.8 s | 0.30 s (60 %) | 0.252 s or 10 % | **FAIL**, exit 2 (only flat in the baselines that fails) |
 
 Counter-example from the same incident: `WARM/LLAMAS_2026-05-06_05-56-25.8_CAL0_mef.fits`, the
@@ -485,6 +491,7 @@ needed). Run with `pytest` from the repo root.
 | `test_shutter_ok_passes` | 0.001 s requested / 0.003 s actual is within the absolute tolerance |
 | `test_shutter_gross_fault_fails` | 600 s requested / 181 s actual → FAIL |
 | `test_short_exposure_overhead_passes` | 0.05 → 0.12 s (large relative, tiny absolute) passes via `abs_or_rel_diff` |
+| `test_bias_shutter_lag_within_tolerance_passes` / `_beyond_tolerance_warns` / `_over_half_second_fails` / `_skip_when_sexptime_absent` | two-tier bias shutter: 0.002–0.211 s PASS, 0.337–0.5 s WARN, > 0.5 s FAIL (`shutter_exptime_gross`), absent SEXPTIME skips both |
 | `test_warm_temperature_flags_warn` | CCDTEMP −40 °C outside a static range → WARN |
 | `test_missing_temperature_is_skipped_not_failed` | absent CCDTEMP → SKIPPED with `passed` true |
 | `test_string_temperature_is_parsed` | a string-valued `"-90.0"` header parses to a number |

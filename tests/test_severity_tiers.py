@@ -322,6 +322,27 @@ def test_shipped_arc_vertical_smear_rule(cal_cfg):
             assert 0.15 < cap < 1.0, detector
 
 
+def test_shipped_bias_shutter_is_two_tier(cal_cfg, sci_cfg):
+    """A bias requests 0.001 s but the shutter lag leaves SEXPTIME at a few ms and
+    occasionally a few tenths of a second. Lag beyond the baseline tolerance is WARN
+    (the frame is still a usable bias); only an actual SEXPTIME above 0.5 s FAILs.
+    Every other frame type keeps the single FAIL consistency rule."""
+    bias = rules_of(cal_cfg, "BIAS")
+    lag = bias["shutter_exptime_consistency"]
+    assert lag["severity"] == "WARN"
+    assert lag["header_check"]["op"] == "abs_or_rel_diff"
+    assert lag["header_check"]["abs_tol"] == pytest.approx(0.214)
+    gross = bias["shutter_exptime_gross"]
+    assert gross["severity"] == "FAIL"
+    assert gross["header_check"] == {"op": "range", "source": "SEXPTIME", "limits": {"max": 0.5}}
+    assert "per_extension" not in gross
+    for cfg, rule_set in ((cal_cfg, "DARK"), (cal_cfg, "LDLS_FLAT"), (cal_cfg, "SKY_FLAT"),
+                          (cal_cfg, "ARC_THAR"), (sci_cfg, "SCIENCE")):
+        rules = rules_of(cfg, rule_set)
+        assert rules["shutter_exptime_consistency"]["severity"] == "FAIL", rule_set
+        assert "shutter_exptime_gross" not in rules, rule_set
+
+
 def test_every_shipped_rule_set_has_edge_saturated_fail(cal_cfg, sci_cfg):
     for cfg in (cal_cfg, sci_cfg):
         for rule_set in cfg["rule_sets"]:

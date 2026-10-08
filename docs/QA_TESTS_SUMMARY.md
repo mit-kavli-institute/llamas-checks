@@ -330,7 +330,7 @@ YAMLs are generated, so edit `scripts/gen_configs.py` (or the YAML) and re-valid
 | Check | Threshold | Severity | Notes |
 |---|---|---|---|
 | Saturation pixel value | **> 63000 ADU** | — | counted by `saturation_fraction` |
-| Shutter `\|SEXPTIME − REXPTIME\|` | abs **or** rel tol (passes within either) | FAIL (cal) / FAIL (sci) | rel_tol = **0.10** all types; abs_tol per type below |
+| Shutter `\|SEXPTIME − REXPTIME\|` | abs **or** rel tol (passes within either) | FAIL (cal, sci); **WARN on BIAS**, where `shutter_exptime_gross` FAILs at SEXPTIME > 0.5 s | rel_tol = **0.10** all types; abs_tol per type below |
 | — BIAS abs_tol | 0.214 s | | |
 | — DARK abs_tol | 0.238 s | | |
 | — ARC abs_tol | 0.328 s | | |

@@ -8,18 +8,18 @@ Baseline epochs: 2026-04-07, 2026-05-02, 2026-06-30; 3344 normal detector-frame 
 
 Units: ADU for levels, RMS and structure metrics; fraction of pixels for saturation; °C for temperature; seconds for shutter tolerances. Level and edge-background limits are a min–max band (WARN outside); RMS (1.4826 x MAD), structure (std of the per-row / per-column medians) and saturation are one-sided caps. On BIAS/DARK the row/col caps are WARN and the 4x "FAIL max" columns are the `*_gross` FAIL tier; on LDLS/ARC the structure cap is FAIL, on SKY it is WARN (on ARC the structure is divided by the lamp signal, see that section). Static FAIL rules on every set: `edge_saturated` (bottom-stripe median > 63000 ADU) and, on BIAS/DARK, `saturation_gross` (> 1 % of pixels above 63000 ADU). "—" means that readout mode is not modelled for that detector (the rule is SKIPPED, never failed). A missing camera in a frame is a placeholder extension: its pixel rules are skipped and the frame FAILs `camera_present` for it unless the camera is listed in `configs/camera_status.yaml`.
 
-## Shutter consistency (`shutter_exptime_consistency`, FAIL)
+## Shutter consistency (`shutter_exptime_consistency`)
 
-Passes when \|SEXPTIME − REXPTIME\| is within EITHER the absolute or the relative tolerance.
+Passes when \|SEXPTIME − REXPTIME\| is within EITHER the absolute or the relative tolerance. FAIL on every frame type except BIAS, where shutter lag beyond the tolerance is WARN (the frame is still a usable bias) and `shutter_exptime_gross` FAILs when the actual SEXPTIME exceeds 0.5 s.
 
-| frame type | abs tolerance (s) | rel tolerance | largest \|SEXPTIME − REXPTIME\| seen in baselines (s) |
-|---|---|---|---|
-| CAL.R-ARC | 0.328 | 0.1 | 0.179 |
-| CAL.R-BIA | 0.214 | 0.1 | 0.059 |
-| CAL.R-DRK | 0.238 | 0.1 | 0.154 |
-| CAL.R-FLT | 0.252 | 0.1 | 0.3 |
-| CAL.R-SKY | 0.348 | 0.1 | 0.074 |
-| SCI.R-* | 1 | 0.1 | — |
+| frame type | severity | abs tolerance (s) | rel tolerance | largest \|SEXPTIME − REXPTIME\| seen in baselines (s) |
+|---|---|---|---|---|
+| CAL.R-ARC | FAIL | 0.328 | 0.1 | 0.179 |
+| CAL.R-BIA | WARN | 0.214 | 0.1 | 0.059 |
+| CAL.R-DRK | FAIL | 0.238 | 0.1 | 0.154 |
+| CAL.R-FLT | FAIL | 0.252 | 0.1 | 0.3 |
+| CAL.R-SKY | FAIL | 0.348 | 0.1 | 0.074 |
+| SCI.R-* | FAIL | 1 | 0.1 | — |
 
 ## CCD temperature (all rule sets, keyed on detector only)
 

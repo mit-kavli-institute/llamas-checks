@@ -122,11 +122,22 @@ def temperature_section(detectors, temp_table, derived):
     ]
 
 
-def shutter_section(derived):
-    header = ["frame type", "abs tolerance (s)", "rel tolerance", "largest \\|SEXPTIME − REXPTIME\\| seen in baselines (s)"]
-    rows = [[k, v["abs_tol"], v["rel_tol"], v.get("abs_delta_max")] for k, v in sorted(derived["shutter"].items())]
-    return ["## Shutter consistency (`shutter_exptime_consistency`, FAIL)", "",
-            "Passes when \\|SEXPTIME − REXPTIME\\| is within EITHER the absolute or the relative tolerance.", "",
+def shutter_section(derived, cal):
+    header = ["frame type", "severity", "abs tolerance (s)", "rel tolerance",
+              "largest \\|SEXPTIME − REXPTIME\\| seen in baselines (s)"]
+    sev = {"CAL.R-BIA": "BIAS", "CAL.R-DRK": "DARK", "CAL.R-FLT": "LDLS_FLAT",
+           "CAL.R-SKY": "SKY_FLAT", "CAL.R-ARC": "ARC_THAR"}
+    rows = []
+    for k, v in sorted(derived["shutter"].items()):
+        rules = {r["name"]: r for r in cal["rule_sets"][sev[k]]["rules"]} if k in sev else {}
+        severity = rules.get("shutter_exptime_consistency", {}).get("severity", "FAIL")
+        rows.append([k, severity, v["abs_tol"], v["rel_tol"], v.get("abs_delta_max")])
+    gross = {r["name"]: r for r in cal["rule_sets"]["BIAS"]["rules"]}["shutter_exptime_gross"]
+    bias_fail = fmt(gross["header_check"]["limits"]["max"])
+    return ["## Shutter consistency (`shutter_exptime_consistency`)", "",
+            "Passes when \\|SEXPTIME − REXPTIME\\| is within EITHER the absolute or the relative tolerance. "
+            "FAIL on every frame type except BIAS, where shutter lag beyond the tolerance is WARN (the frame "
+            f"is still a usable bias) and `shutter_exptime_gross` FAILs when the actual SEXPTIME exceeds {bias_fail} s.", "",
             table(header, rows), ""]
 
 
@@ -188,7 +199,7 @@ def main() -> int:
         "camera is listed in `configs/camera_status.yaml`.",
         "",
     ]
-    doc += shutter_section(derived)
+    doc += shutter_section(derived, cal)
     doc += temperature_section(detectors, tables["temp"], derived)
     doc += science_section(sci)
     for name, prodcatg, has_level in CAL_TYPES:

@@ -131,7 +131,7 @@ on a bias means the frame is not usable as a bias, not that one detector is nois
 
 | Check | What it catches | Level |
 |---|---|---|
-| Shutter vs requested time | shutter stuck open, exposure aborted or truncated | **FAIL** |
+| Shutter vs requested time | shutter stuck open, exposure aborted or truncated | **FAIL**; on a bias, shutter lag beyond the tolerance is WARN and only an actual exposure above 0.5 s is **FAIL** |
 | Edge stripe saturated | light flooding the unilluminated edge of the detector: a railed or grossly overexposed frame | **FAIL** (every frame type, incl. science) |
 | Row / column structure | banding, bars, a warming glow | bias/dark: WARN above the detector's cap, **FAIL** above 4× the cap; LDLS: **FAIL** above the cap; ThAr arcs: **FAIL** above the cap on structure ÷ lamp signal (exposure-independent); sky flats: WARN |
 | Vertical smear (ThAr arcs only) | a vertical halo or charge smear around the lines, as on the 2026-07-10 commissioning arcs | **FAIL** above the detector's cap on std(per-column median) ÷ lamp signal |
@@ -239,6 +239,9 @@ worth acting on even when the temperature reads fine.**
 
 - **FAIL — shutter.** The frame is not the exposure you requested. Retake it, and check the
   shutter before continuing the sequence.
+- **WARN — bias shutter lag.** The shutter took longer than usual to close on a bias (actual
+  exposure above the 0.214 s tolerance but no more than 0.5 s). The frame is still a usable bias;
+  keep an eye on the shutter. Above 0.5 s the bias FAILs.
 - **FAIL — structure.** Inspect the detector named in the output. Do not use the frame as a
   master calibration.
 - **FAIL — temperature hot or shut-off.** Cooling needs attention. Data from that camera will

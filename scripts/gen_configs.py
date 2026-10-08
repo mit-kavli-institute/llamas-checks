@@ -17,7 +17,9 @@ Design (2026-09 revision -- see docs/QA_CHECKS_CATALOGUE.md):
       unilluminated bottom stripe itself is at the ADC ceiling (light flooding
       pixels no fibre illuminates -- the signature of a railed/overexposed flat).
 - Level/background/RMS are WARN (drift & warm monitoring); rms uses the robust
-  1.4826*MAD metric; shutter is FAIL; CCD temperature has a WARN band and a FAIL
+  1.4826*MAD metric; shutter is FAIL, except on BIAS where lag beyond the tolerance is
+  WARN and only an actual SEXPTIME above BIAS_SHUTTER_FAIL_S (0.5 s) is FAIL
+  (``shutter_exptime_gross``); CCD temperature has a WARN band and a FAIL
   (shut-off) band.
 - Illuminated frames (flat/sky/arc) get NO full-frame level check (illumination
   varies with exposure time).
@@ -162,11 +164,25 @@ def base_blocks():
     }
 
 
-def shutter_rule(pc):
+def shutter_rule(pc, severity="FAIL"):
     s = DER["shutter"][pc]
-    return {"name": "shutter_exptime_consistency", "severity": "FAIL",
+    return {"name": "shutter_exptime_consistency", "severity": severity,
             "header_check": {"op": "abs_or_rel_diff", "source": "SEXPTIME", "other": "REXPTIME",
                              "abs_tol": s["abs_tol"], "rel_tol": s["rel_tol"]}}
+
+
+# Bias shutter lag is two-tier. A bias requests 0.001 s but the shutter lag routinely
+# leaves SEXPTIME at a few ms and occasionally a few tenths of a second; the frame is
+# still a usable bias, so lag beyond the baseline tolerance is only WARN. The frame
+# FAILs (``shutter_exptime_gross``) only when the actual shutter exposure exceeds
+# BIAS_SHUTTER_FAIL_S -- at that point it is no longer a bias.
+BIAS_SHUTTER_FAIL_S = 0.5  # s, actual SEXPTIME
+
+
+def shutter_gross_rule():
+    return {"name": "shutter_exptime_gross", "severity": "FAIL",
+            "header_check": {"op": "range", "source": "SEXPTIME",
+                             "limits": {"max": BIAS_SHUTTER_FAIL_S}}}
 
 
 # CCD temperature keyword spellings vary across file generations (underscore /
@@ -347,7 +363,11 @@ def build_cal_config():
         lookup[eb] = build_table(pc, edge_leaf)
         lookup[st] = build_table(pc, struct_norm_leaf if normalised else struct_leaf)
         lookup[sa] = build_table(pc, sat_leaf)
-        rules = [shutter_rule(pc), edge_bg_rule(eb, "WARN"), edge_sat_rule()]
+        if pc == "CAL.R-BIA":
+            rules = [shutter_rule(pc, "WARN"), shutter_gross_rule()]
+        else:
+            rules = [shutter_rule(pc)]
+        rules += [edge_bg_rule(eb, "WARN"), edge_sat_rule()]
         if uniform:
             lv = f"level_{setname}"; lookup[lv] = build_table(pc, level_leaf)
             rules += level_rules(lv, "WARN")

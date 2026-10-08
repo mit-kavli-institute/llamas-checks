@@ -450,3 +450,63 @@ def test_shipped_science_config_has_warming_rate():
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# ---------------------------------------------------------------------------
+# Two-tier bias shutter rules (shipped BIAS set): lag beyond the tolerance is
+# WARN, an actual SEXPTIME above 0.5 s is FAIL (shutter_exptime_gross).
+# ---------------------------------------------------------------------------
+BIAS_TWO_TIER = copy.deepcopy(CONFIG)
+BIAS_TWO_TIER["rule_sets"]["BIAS"]["rules"] = [
+    {"name": "shutter_exptime_consistency", "severity": "WARN",
+     "header_check": {"op": "abs_or_rel_diff", "source": "SEXPTIME",
+                      "other": "REXPTIME", "abs_tol": 0.214, "rel_tol": 0.10}},
+    {"name": "shutter_exptime_gross", "severity": "FAIL",
+     "header_check": {"op": "range", "source": "SEXPTIME", "limits": {"max": 0.5}}},
+]
+
+
+def run_two_tier(path):
+    return E.QAEngine(BIAS_TWO_TIER).run(Path(path))
+
+
+def test_bias_two_tier_config_is_valid():
+    errors = QAConfigValidator(BIAS_TWO_TIER).validate()
+    assert errors == [], [str(e) for e in errors]
+
+
+@pytest.mark.parametrize("sexp", [0.002, 0.05, 0.211])
+def test_bias_shutter_lag_within_tolerance_passes(tmp_path, sexp):
+    rep = run_two_tier(make_mef(tmp_path, "lag.fits", rexp=0.001, sexp=sexp, ccdtemp=None))
+    assert result_for(rep, "shutter_exptime_consistency")["passed"] is True
+    assert result_for(rep, "shutter_exptime_gross")["passed"] is True
+    assert rep["overall_verdict"] == "PASS"
+
+
+@pytest.mark.parametrize("sexp", [0.337, 0.352, 0.5])
+def test_bias_shutter_lag_beyond_tolerance_warns(tmp_path, sexp):
+    rep = run_two_tier(make_mef(tmp_path, "lag.fits", rexp=0.001, sexp=sexp, ccdtemp=None))
+    lag = result_for(rep, "shutter_exptime_consistency")
+    assert lag["passed"] is False and lag["verdict_effect"] == "WARN"
+    assert result_for(rep, "shutter_exptime_gross")["passed"] is True
+    assert rep["overall_verdict"] == "WARN"
+
+
+@pytest.mark.parametrize("sexp", [0.501, 0.6, 122.7])
+def test_bias_shutter_over_half_second_fails(tmp_path, sexp):
+    rep = run_two_tier(make_mef(tmp_path, "open.fits", rexp=0.001, sexp=sexp, ccdtemp=None))
+    gross = result_for(rep, "shutter_exptime_gross")
+    assert gross["passed"] is False and gross["verdict_effect"] == "FAIL"
+    assert gross["measured_value"] == pytest.approx(sexp)
+    assert gross["limits"] == {"max": 0.5}
+    assert rep["overall_verdict"] == "FAIL"
+
+
+def test_bias_shutter_rules_skip_when_sexptime_absent(tmp_path):
+    path = make_mef(tmp_path, "nosexp.fits", rexp=0.001, sexp=0.002, ccdtemp=None)
+    with fits.open(path, mode="update") as hdul:
+        del hdul[0].header["SEXPTIME"]
+    rep = run_two_tier(path)
+    for rule in ("shutter_exptime_consistency", "shutter_exptime_gross"):
+        assert result_for(rep, rule)["status"] == "SKIPPED"
+    assert rep["overall_verdict"] == "PASS"
