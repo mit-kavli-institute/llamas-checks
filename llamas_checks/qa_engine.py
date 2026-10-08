@@ -78,6 +78,24 @@ PLACEHOLDER_VALUES = (0.0, 1.0)
 STRUCTURE_NORM_TYPES = ("row_structure_norm", "column_structure_norm")
 DEFAULT_SIGNAL_REGION = "bottom_stripe"
 DEFAULT_MIN_SIGNAL = 2.0   # ADU; below this the ratio is noise and the rule SKIPs
+
+# Vertical smear / halo on a lamp frame: a narrow curved arc line occupies a small
+# fraction of every column, so the per-column MEDIAN sits at the background; a
+# vertical halo or charge smear fills whole columns around the bright lines and
+# lifts the median of just those columns. std(per-column median) / lamp signal is
+# therefore ~0.03 on a normal red arc at any exposure and >1 on a smeared one.
+# The median profile is read off the same sorted array as the column structure
+# metric, so the rule costs no extra pixel pass. Below ~20 ADU of signal the
+# green/blue column medians are read-noise dominated, hence the higher default.
+SMEAR_TYPES = ("vertical_smear",)
+DEFAULT_MIN_SIGNAL_SMEAR = 20.0
+# Metric types that need the sorted-line profiles of the region (shared per HDU).
+_PROFILE_TYPES = ("row_structure", "column_structure") + STRUCTURE_NORM_TYPES + SMEAR_TYPES
+
+
+def _profile_axis(metric_type: str) -> int:
+    """-1 collapses columns into a per-row profile; -2 collapses rows into a per-column profile."""
+    return -1 if metric_type.startswith("row_structure") else -2
  
  
 @dataclass
@@ -243,6 +261,9 @@ class QAEngine:
         # (hdu, region, background region) -> signal above the edge stripe, shared by
         # the row and column normalised-structure metrics of one detector.
         self._signal_cache: dict[tuple[int, str, str], float] = {}
+        # (hdu, region, axis) -> (trimmed-mean profile, median profile) from ONE sort,
+        # shared by the structure, normalised-structure and vertical-smear metrics.
+        self._profile_cache: dict[tuple[int, str, int], tuple[Any, Any]] = {}
         # memmap=False is required for FITS files containing BZERO/BSCALE/BLANK
         # keywords, because Astropy needs to scale the image data in memory.
         with fits.open(fits_path, memmap=False) as hdul:
@@ -804,11 +825,17 @@ class QAEngine:
                 # rate metrics need the exposure time; absent/too-short -> SKIP this rule
                 exptime = self._resolve_exptime(hdul, metric)
                 value = self._compute_metric(region_data, metric, exptime=exptime)
-            elif metric_type in STRUCTURE_NORM_TYPES:
-                # normalised structure needs the lamp signal; too faint -> SKIP this rule
-                signal = self._resolve_signal(data, hdu_index, region_name, region_data,
-                                              metric, extension_name)
-                value = self._compute_metric(region_data, metric, signal=signal)
+            elif metric_type in _PROFILE_TYPES:
+                # one sort per axis per HDU, shared by every profile metric on it
+                profiles = self._resolve_profiles(hdu_index, region_name, region_data,
+                                                  _profile_axis(metric_type))
+                signal = None
+                if metric_type in STRUCTURE_NORM_TYPES or metric_type in SMEAR_TYPES:
+                    # normalised metrics need the lamp signal; too faint -> SKIP this rule
+                    signal = self._resolve_signal(data, hdu_index, region_name, region_data,
+                                                  metric, extension_name)
+                value = self._compute_metric(region_data, metric, signal=signal,
+                                             profiles=profiles)
             else:
                 value = self._compute_metric(region_data, metric)
         except QAEngineError as exc:
@@ -850,16 +877,31 @@ class QAEngine:
             )
         return data[..., y_start:y_end, x_start:x_end]
  
+    def _resolve_profiles(self, hdu_index: int, region_name: str, region_data: Any,
+                          axis: int) -> tuple[Any, Any]:
+        """``line_profiles`` of the region along ``axis``, computed once per HDU per run."""
+        cache = getattr(self, "_profile_cache", None)
+        key = (hdu_index, region_name, axis)
+        if cache is not None and key in cache:
+            return cache[key]
+        profiles = line_profiles(region_data, axis)
+        if cache is not None:
+            cache[key] = profiles
+        return profiles
+
     def _resolve_signal(self, data: Any, hdu_index: int, region_name: str, region_data: Any,
                         metric: dict[str, Any], extension_name: str | None) -> float:
-        """Lamp signal for a normalised-structure metric: mean of the metric's region
-        minus the median of ``metric['background_region']`` (default bottom_stripe),
-        computed once per HDU per run. Below ``metric['min_signal']`` (default 2 ADU)
-        raises LookupMissError so the rule is SKIPPED, like a too-short exposure for
-        the gradient-rate metric: the ratio of two noise terms would be meaningless.
+        """Lamp signal for a normalised-structure or smear metric: mean of the metric's
+        region minus the median of ``metric['background_region']`` (default
+        bottom_stripe), computed once per HDU per run. Below ``metric['min_signal']``
+        (default 2 ADU for structure, 20 ADU for smear) raises LookupMissError so the
+        rule is SKIPPED, like a too-short exposure for the gradient-rate metric: the
+        ratio of two noise terms would be meaningless.
         """
         background_region = metric.get("background_region", DEFAULT_SIGNAL_REGION)
-        min_signal = float(metric.get("min_signal", DEFAULT_MIN_SIGNAL))
+        default_min = (DEFAULT_MIN_SIGNAL_SMEAR if metric.get("type") in SMEAR_TYPES
+                       else DEFAULT_MIN_SIGNAL)
+        min_signal = float(metric.get("min_signal", default_min))
         cache = getattr(self, "_signal_cache", None)
         key = (hdu_index, region_name, background_region)
         if cache is not None and key in cache:
@@ -898,10 +940,14 @@ class QAEngine:
 
     @staticmethod
     def _compute_metric(region_data: Any, metric: dict[str, Any],
-                        exptime: float | None = None, signal: float | None = None) -> float:
+                        exptime: float | None = None, signal: float | None = None,
+                        profiles: tuple[Any, Any] | None = None) -> float:
         """Evaluate ``metric`` on ``region_data``. ``exptime`` is required by the
         gradient-rate metric, ``signal`` (ADU above the edge stripe, see
-        ``_resolve_signal``) by the normalised structure metrics."""
+        ``_resolve_signal``) by the normalised structure and smear metrics, and
+        ``profiles`` (the ``line_profiles`` of the region along the metric's axis,
+        see ``_resolve_profiles``) lets the profile metrics share one sort; when it
+        is None the profiles are computed here."""
         raw = np.asarray(region_data)
         integer_input = np.issubdtype(raw.dtype, np.integer)
         if integer_input:
@@ -977,7 +1023,7 @@ class QAEngine:
         if metric_type == "count_above":
             return float(np.count_nonzero(finite_values > metric["threshold"]))
         
-        if metric_type in ("row_structure", "column_structure") or metric_type in STRUCTURE_NORM_TYPES:
+        if metric_type in _PROFILE_TYPES:
             # Banding metric: std of the per-row (or per-column) TRIMMED means.
             # Whole-row/column offsets, bars and glow gradients move the profile;
             # isolated hot pixels, hot-column fragments and cosmic rays do not
@@ -985,13 +1031,18 @@ class QAEngine:
             # a median profile missed real bars confined to part of a column).
             # The *_norm variants divide by the lamp signal so a bright 1 s arc
             # and a faint 0.07 s arc give the same number for the same pattern.
-            axis = -1 if metric_type.startswith("row_structure") else -2  # collapse cols / rows
-            profile = trimmed_mean_profile(values, axis)
+            # vertical_smear is the std of the per-column MEDIANS over the signal:
+            # curved arc lines leave the column medians at the background, a
+            # vertical halo lifts them (see SMEAR_TYPES).
+            if profiles is None:
+                profiles = line_profiles(values, _profile_axis(metric_type))
+            trimmed, median = profiles
+            profile = median if metric_type in SMEAR_TYPES else trimmed
             profile = profile[np.isfinite(profile)]
             if profile.size == 0:
                 raise QAEngineError("structure metric has no finite rows/columns")
             structure = float(np.nanstd(profile))
-            if metric_type in STRUCTURE_NORM_TYPES:
+            if metric_type in STRUCTURE_NORM_TYPES or metric_type in SMEAR_TYPES:
                 if signal is None or not np.isfinite(signal) or signal <= 0:
                     raise QAEngineError(f"{metric_type} requires a positive signal")
                 return structure / float(signal)
@@ -1143,11 +1194,16 @@ def integer_mad(values: Any) -> float:
     return _median_from_histogram(deviations[order], counts[order])
 
 
-def trimmed_mean_profile(values: Any, axis: int, trim: float = STRUCTURE_TRIM_FRACTION) -> Any:
-    """Mean along ``axis`` after dropping the lowest/highest ``trim`` fraction of each line.
+def line_profiles(values: Any, axis: int, trim: float = STRUCTURE_TRIM_FRACTION) -> tuple[Any, Any]:
+    """``(trimmed_mean, median)`` of every line along ``axis`` from ONE sort.
 
-    At least one pixel is trimmed from each end so the metric is defined for short
-    test frames; NaNs sort to the top end and are trimmed or ignored by nanmean.
+    The trimmed mean drops the lowest/highest ``trim`` fraction of each line (at
+    least one pixel from each end so the metric is defined for short test frames).
+    The median is the middle element (mean of the two middle elements for an even
+    length), identical to ``np.median`` along the axis. On integer frames the sort
+    is numpy's radix sort on a contiguous transpose for columns (see the comments
+    below); on float frames NaNs sort to the top end and are trimmed or ignored by
+    the nan-aware reductions.
     """
     array = np.asarray(values)
     if np.issubdtype(array.dtype, np.integer):
@@ -1163,14 +1219,27 @@ def trimmed_mean_profile(values: Any, axis: int, trim: float = STRUCTURE_TRIM_FR
         k = max(1, int(n * trim))
         index = [slice(None)] * ordered.ndim
         index[axis] = slice(k, n - k)
-        return ordered[tuple(index)].mean(axis=axis, dtype=np.float64)
+        trimmed = ordered[tuple(index)].mean(axis=axis, dtype=np.float64)
+        middle = [slice(None)] * ordered.ndim
+        middle[axis] = n // 2
+        median = ordered[tuple(middle)].astype(np.float64)
+        if n % 2 == 0:
+            middle[axis] = n // 2 - 1
+            median = (median + ordered[tuple(middle)]) / 2.0
+        return trimmed, median
 
     ordered = np.sort(np.asarray(array, dtype=float), axis=axis)
     n = ordered.shape[axis]
     k = max(1, int(n * trim))
     index = [slice(None)] * ordered.ndim
     index[axis] = slice(k, n - k)
-    return np.nanmean(ordered[tuple(index)], axis=axis)
+    return np.nanmean(ordered[tuple(index)], axis=axis), np.nanmedian(ordered, axis=axis)
+
+
+def trimmed_mean_profile(values: Any, axis: int, trim: float = STRUCTURE_TRIM_FRACTION) -> Any:
+    """Mean along ``axis`` after dropping the lowest/highest ``trim`` fraction of each line
+    (the first element of ``line_profiles``)."""
+    return line_profiles(values, axis, trim)[0]
 
 
 def load_yaml(path: Path) -> dict[str, Any]:

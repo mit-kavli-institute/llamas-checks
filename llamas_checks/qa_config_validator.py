@@ -72,6 +72,7 @@ class QAConfigValidator:
         "column_structure",
         "row_structure_norm",
         "column_structure_norm",
+        "vertical_smear",
         "background_gradient_rate",
     }
     SEVERITIES = {"PASS", "WARN", "FAIL"}
@@ -258,7 +259,7 @@ class QAConfigValidator:
                     self.add_error(f"{path}.exptime_keys", "must be a list of non-empty strings")
                 if "min_exptime" in metric and not self.is_number(metric.get("min_exptime")):
                     self.add_error(f"{path}.min_exptime", "must be numeric")
-            if mtype in {"row_structure_norm", "column_structure_norm"}:
+            if mtype in {"row_structure_norm", "column_structure_norm", "vertical_smear"}:
                 # optional: the region whose median is the background (default
                 # bottom_stripe) and the minimum signal below which the rule SKIPs
                 allowed.update({"background_region", "min_signal"})

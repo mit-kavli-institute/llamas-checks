@@ -135,6 +135,7 @@ Identical to BIAS with the DARK tables; shutter abs tolerance 0.238 s.
 | `edge_background_level` | median of `bottom_stripe` | band, per det × mode | WARN |
 | `edge_saturated` | median of `bottom_stripe` | ≤ 63000 ADU | FAIL |
 | `row_structure` / `column_structure` | LDLS: banding amplitude of `full_frame` (ADU); ARC: banding amplitude ÷ lamp signal (full-frame mean − `bottom_stripe` median), dimensionless, SKIPPED below 2 ADU of signal | ≤ heavy-tail cap, per det × mode (ARC: one cap for both modes) | FAIL |
+| `vertical_smear` (ARC only) | std of the per-column *median* profile of `full_frame` ÷ lamp signal: vertical halo / smear around the lines, SKIPPED below 20 ADU of signal | ≤ heavy-tail cap, per det (one cap for both modes; ~0.07 red, 0.25–0.55 green/blue) | FAIL |
 | `saturation_fraction` | fraction > 63000 ADU | ≤ frac_max, per det × mode | WARN |
 | `ccd_temperature_warm` / `_hot` / `_shutoff` | `CCDTEMP*` per extension | as BIAS | WARN / FAIL / FAIL |
 
@@ -298,20 +299,21 @@ Result: `FAIL: 1 fail check(s): column_structure_gross@2.B.Green`, exit 2. The 1
 structure" that the plain-mean metric also flagged on this frame (4.11 vs 2.0) was hot pixels: with
 the trimmed profile it measures 0.14 and passes, which is the intended behaviour.
 
-**Commissioning ThAr arc with red blooming** — `COMM/LLAMAS_2026-07-10_20-22-43.7_CAL22_mef.fits`
-(ARC_THAR, FAST, SEXPTIME 0.074 s but carrying the signal of a ~2 s arc; the red lines are smeared
-into vertical streaks). With the signal-normalised metric (2026-10) it FAILs `row_structure` on
-five red cameras (1.A.Red 0.42 vs cap 0.26, 1.B.Red 0.40 vs 0.23, 3.A.Red 0.43 vs 0.34, 3.B.Red
-0.43 vs 0.25, 4.B.Red 0.42 vs 0.24; the baseline arcs never exceed 0.22 on a red row) plus the
-edge-background and red saturation WARNs. Result: **FAIL**, exit 2. (Under the earlier absolute
-caps it failed 43 checks on all 22 detectors, as did the next frame, because both were far
-brighter than the 0.07–0.4 s baseline arcs.)
+**Commissioning ThAr arcs with vertical halos / smear** — two consecutive frames, both FAST with a
+few-tenths-of-a-second SEXPTIME but carrying the signal of a multi-second arc. Saturated lines on
+their own are normal on an arc; what marks these frames is the vertical halo around the lines
+(charge spread along whole columns), which `vertical_smear` measures as the std of the per-column
+median profile over the lamp signal. Normal arcs, faint or bright, sit at ≤ 0.07 on a red camera
+(cap ≈ 0.07–0.10) and ≤ 0.37 on green/blue (caps 0.25–0.55).
 
-The next frame, `COMM/LLAMAS_2026-07-10_20-22-58.8_CAL22_mef.fits` (FAST, SEXPTIME 0.178 s, again
-with the signal of a multi-second arc), has thick saturated lines but no streaking; its normalised
-structure sits at 0.85–0.88 × cap on the red rows, so it now comes back **WARN** (red saturation
-and edge-background warnings) rather than FAIL. Overexposure alone is not what the structure rule
-is for; the saturation WARN carries that.
+| frame | `vertical_smear` | `row_structure` (÷ signal) | other |
+|---|---|---|---|
+| `COMM/LLAMAS_2026-07-10_20-22-43.7_CAL22_mef.fits` (0.074 s; lines smeared into streaks on every camera) | FAIL on all 8 reds at 1.6–1.8 (16–25 × cap) and on most greens/blues at 0.45–0.69 (1.1–1.9 ×) | FAIL on five reds at 0.40–0.43 (cap 0.23–0.34) | edge-background and red saturation WARNs |
+| `COMM/LLAMAS_2026-07-10_20-22-58.8_CAL22_mef.fits` (0.178 s; thick saturated lines, halos on the reds) | FAIL on all 8 reds at 0.12–1.38 (1.4–17 × cap); greens/blues normal (0.16–0.36) | passes (0.85–0.88 × cap) | edge-background and red saturation WARNs |
+
+Result for both: **FAIL**, exit 2. (Under the pre-2026-10 absolute structure caps both failed 43
+checks on all 22 detectors, mostly because they were far brighter than the 0.07–0.4 s baseline
+arcs; the normalised structure alone caught only 43.7.)
 
 Counter-example, same sequence, 15 s earlier: `COMM/LLAMAS_2026-07-10_20-22-28.7_CAL22_mef.fits`
 passes 135 / 135 evaluated checks (exit 0, with `--cameras-down 1.A.Blue,4.A.Blue`). The 26 ThAr

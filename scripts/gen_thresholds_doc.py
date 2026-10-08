@@ -55,8 +55,12 @@ def cal_type_section(name, prodcatg, has_level, detectors, tables, derived, norm
         out += ["Row / column structure on this type is **normalised by the lamp signal** "
                 "(structure ÷ (full-frame mean − bottom-stripe median), dimensionless) so the cap "
                 "does not depend on the exposure time; the sample is pooled over both readout modes, "
-                "so the FAST and SLOW caps are identical. Rules SKIP when the signal is below 2 ADU.", ""]
+                "so the FAST and SLOW caps are identical. Rules SKIP when the signal is below 2 ADU. "
+                "**Vertical smear** is the std of the per-column median profile ÷ the same signal "
+                "(a vertical halo around the lines lifts whole-column medians; curved lines do not), "
+                "FAIL above the cap, SKIPPED below 20 ADU of signal.", ""]
     edge, struct, sat = tables[f"edge_bg_{name}"], tables[f"struct_{name}"], tables[f"sat_{name}"]
+    smear = tables.get(f"smear_{name}") if normalised else None
     level = tables.get(f"level_{name}") if has_level else None
     n_files = {}
     for mode, per_det in derived["per_detector"][prodcatg].items():
@@ -70,6 +74,8 @@ def cal_type_section(name, prodcatg, has_level, detectors, tables, derived, norm
                    else ["row max", "col max"])
         if has_level:
             header += ["row FAIL max (4x)", "col FAIL max (4x)"]
+        if smear is not None:
+            header += ["vertical smear max"]
         header += ["sat frac max"]
         rows = []
         for det in detectors:
@@ -84,6 +90,9 @@ def cal_type_section(name, prodcatg, has_level, detectors, tables, derived, norm
             row += [s and s["row_max"], s and s["col_max"]]
             if has_level:
                 row += [s and s.get("row_fail_max"), s and s.get("col_fail_max")]
+            if smear is not None:
+                sm = smear.get(det, {}).get(mode)
+                row += [sm and sm["max"]]
             row += [f and f["frac_max"]]
             rows.append(row)
         out += [f"### {name} — readout mode {mode}", "", table(header, rows), ""]

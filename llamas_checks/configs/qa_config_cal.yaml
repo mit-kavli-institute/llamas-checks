@@ -1,4 +1,4 @@
-# LLAMAS calibration QA config -- GENERATED from robust baseline analysis (2026-04-07/05-02/06-30; trimmed-mean structure profiles + MAD rms, WARN/FAIL tiers, 2026-09; ThAr structure normalised by lamp signal, 2026-10). See docs/QA_CHECKS_CATALOGUE.md; regenerate via scripts/gen_configs.py.
+# LLAMAS calibration QA config -- GENERATED from robust baseline analysis (2026-04-07/05-02/06-30; trimmed-mean structure profiles + MAD rms, WARN/FAIL tiers, 2026-09; ThAr structure normalised by lamp signal + vertical-smear rule, 2026-10). See docs/QA_CHECKS_CATALOGUE.md; regenerate via scripts/gen_configs.py.
 config_version: '1.0'
 instrument:
   name: LLAMAS
@@ -162,6 +162,10 @@ metrics:
     type: column_structure_norm
     background_region: bottom_stripe
     min_signal: 2.0
+  vertical_smear:
+    type: vertical_smear
+    background_region: bottom_stripe
+    min_signal: 20.0
   background_gradient_rate:
     type: background_gradient_rate
     exptime_keys:
@@ -2807,6 +2811,127 @@ lookup_tables:
         frac_max: 0.0005
       SLOW:
         frac_max: 0.0005
+  smear_ARC_THAR:
+    1.A.Red:
+      FAST:
+        max: 0.0608
+      SLOW:
+        max: 0.0608
+    1.A.Green:
+      FAST:
+        max: 0.247
+      SLOW:
+        max: 0.247
+    1.A.Blue:
+      FAST:
+        max: 0.5108
+      SLOW:
+        max: 0.5108
+    1.B.Red:
+      FAST:
+        max: 0.0626
+      SLOW:
+        max: 0.0626
+    1.B.Green:
+      FAST:
+        max: 0.4425
+      SLOW:
+        max: 0.4425
+    1.B.Blue:
+      FAST:
+        max: 0.5314
+      SLOW:
+        max: 0.5314
+    2.A.Red:
+      FAST:
+        max: 0.0623
+      SLOW:
+        max: 0.0623
+    2.A.Green:
+      FAST:
+        max: 0.3503
+      SLOW:
+        max: 0.3503
+    2.A.Blue:
+      FAST:
+        max: 0.5108
+      SLOW:
+        max: 0.5108
+    2.B.Red:
+      FAST:
+        max: 0.062
+      SLOW:
+        max: 0.062
+    2.B.Green:
+      FAST:
+        max: 0.3877
+      SLOW:
+        max: 0.3877
+    2.B.Blue:
+      FAST:
+        max: 0.3723
+      SLOW:
+        max: 0.3723
+    3.A.Red:
+      FAST:
+        max: 0.0742
+      SLOW:
+        max: 0.0742
+    3.A.Green:
+      FAST:
+        max: 0.2627
+      SLOW:
+        max: 0.2627
+    3.A.Blue:
+      FAST:
+        max: 0.4237
+      SLOW:
+        max: 0.4237
+    3.B.Red:
+      FAST:
+        max: 0.0639
+      SLOW:
+        max: 0.0639
+    3.B.Green:
+      FAST:
+        max: 0.3595
+      SLOW:
+        max: 0.3595
+    3.B.Blue:
+      FAST:
+        max: 0.5481
+      SLOW:
+        max: 0.5481
+    4.A.Red:
+      FAST:
+        max: 0.095
+      SLOW:
+        max: 0.095
+    4.A.Green:
+      FAST:
+        max: 0.2957
+      SLOW:
+        max: 0.2957
+    4.A.Blue:
+      FAST:
+        max: 0.5108
+      SLOW:
+        max: 0.5108
+    4.B.Red:
+      FAST:
+        max: 0.0638
+      SLOW:
+        max: 0.0638
+    4.B.Green:
+      FAST:
+        max: 0.2745
+      SLOW:
+        max: 0.2745
+    4.B.Blue:
+      FAST:
+        max: 0.4899
+      SLOW:
+        max: 0.4899
 rule_sets:
   BIAS:
     applies_when:
@@ -3329,6 +3454,15 @@ rule_sets:
         table: struct_ARC_THAR
         keys: *id001
         max_field: col_max
+    - name: vertical_smear
+      region: full_frame
+      metric: vertical_smear
+      per_extension: true
+      severity: FAIL
+      expected_from_lookup:
+        table: smear_ARC_THAR
+        keys: *id001
+        max_field: max
     - name: saturation_fraction
       region: full_frame
       metric: saturated_fraction

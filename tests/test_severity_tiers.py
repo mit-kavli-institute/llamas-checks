@@ -295,6 +295,32 @@ def test_shipped_arc_structure_is_signal_normalised(cal_cfg):
             assert 0.0 < modes["FAST"]["row_max"] < 1.0, detector
 
 
+def test_shipped_arc_vertical_smear_rule(cal_cfg):
+    """ThAr arcs FAIL on vertical halo / smear: std of the per-column median profile
+    over the lamp signal, per-detector caps pooled over readout mode. Normal arcs sit
+    at ~0.03 on a red camera and 0.15-0.37 on green/blue; the 2026-07-10 odd arcs at
+    >1 on the reds."""
+    arc = rules_of(cal_cfg, "ARC_THAR")
+    rule = arc["vertical_smear"]
+    assert rule["severity"] == "FAIL" and rule["metric"] == "vertical_smear"
+    assert rule["region"] == "full_frame" and rule["per_extension"] is True
+    assert rule["expected_from_lookup"]["table"] == "smear_ARC_THAR"
+    for rule_set in ("BIAS", "DARK", "LDLS_FLAT", "SKY_FLAT"):
+        assert "vertical_smear" not in rules_of(cal_cfg, rule_set)
+    metric = cal_cfg["metrics"]["vertical_smear"]
+    assert metric["type"] == "vertical_smear"
+    assert metric["background_region"] == "bottom_stripe" and metric["min_signal"] == 20.0
+    table = cal_cfg["lookup_tables"]["smear_ARC_THAR"]
+    assert len(table) == 24
+    for detector, modes in table.items():
+        assert set(modes) == {"FAST", "SLOW"} and modes["FAST"] == modes["SLOW"], detector
+        cap = modes["FAST"]["max"]
+        if detector.endswith("Red"):
+            assert 0.03 < cap < 0.15, detector
+        else:
+            assert 0.15 < cap < 1.0, detector
+
+
 def test_every_shipped_rule_set_has_edge_saturated_fail(cal_cfg, sci_cfg):
     for cfg in (cal_cfg, sci_cfg):
         for rule_set in cfg["rule_sets"]:

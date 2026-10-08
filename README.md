@@ -134,6 +134,7 @@ on a bias means the frame is not usable as a bias, not that one detector is nois
 | Shutter vs requested time | shutter stuck open, exposure aborted or truncated | **FAIL** |
 | Edge stripe saturated | light flooding the unilluminated edge of the detector: a railed or grossly overexposed frame | **FAIL** (every frame type, incl. science) |
 | Row / column structure | banding, bars, a warming glow | bias/dark: WARN above the detector's cap, **FAIL** above 4× the cap; LDLS: **FAIL** above the cap; ThAr arcs: **FAIL** above the cap on structure ÷ lamp signal (exposure-independent); sky flats: WARN |
+| Vertical smear (ThAr arcs only) | a vertical halo or charge smear around the lines, as on the 2026-07-10 commissioning arcs | **FAIL** above the detector's cap on std(per-column median) ÷ lamp signal |
 | Saturation | light leak or saturated pixels (above 63000 ADU) | WARN above the detector's cap; bias/dark **FAIL** above 1 % of the frame |
 | CCD temperature — warm / hot / shut-off | cooling degrading or failed | WARN / **FAIL** / **FAIL** |
 | Background level and read noise | bias-level drift, excess noise | WARN |
@@ -153,6 +154,14 @@ on a bias means the frame is not usable as a bias, not that one detector is nois
   mode. Before this (2026-10) the fast-mode caps encoded the 0.07–0.4 s baseline exposures and a
   perfectly good 1 s fast arc failed on every camera. The rule SKIPs on a detector with less than
   2 ADU of signal.
+- Saturated lines are normal on an arc (the reds saturate at 1 s). What is *not* normal is a
+  **vertical halo or smear** around the lines, so arcs also get a `vertical_smear` check: the
+  standard deviation of the per-column *median* profile divided by the lamp signal. A narrow curved
+  line occupies a small fraction of each column and leaves the column medians at the background;
+  a halo fills whole columns and lifts them. Normal arcs measure ~0.03 on a red camera at any
+  exposure, the 2026-07-10 commissioning arcs over 1. The median comes from the same sorted array
+  as the column structure, so the check costs nothing extra; it SKIPs below 20 ADU of signal
+  (green/blue cameras on the shortest ~0.07 s arcs).
 - The structure limits are set separately for each detector and are deliberately generous:
   naturally structured detectors (4.A.Red's left-edge glow, 3.A.Blue's fixed banding) and red
   ThAr arcs that normally saturate pass comfortably. On LDLS flats the red detectors are commonly

@@ -113,6 +113,10 @@ struct_norm_leaf = lambda e: {"row_max": e["structure_norm"]["row_max"],
 # 1 s) and a perfectly good 1 s FAST arc failed on every camera.
 NORMALISED_STRUCTURE_SETS = {"ARC_THAR"}
 MIN_SIGNAL_NORM = 2.0   # ADU above the edge stripe; fainter -> rule SKIPs
+# Vertical halo / smear on arcs (std of the per-column median profile over the lamp
+# signal): the fault the 2026-07-10 commissioning arcs show. Same sets as above.
+smear_leaf = lambda e: {"max": e["smear"]["max"]}
+MIN_SIGNAL_SMEAR = 20.0  # ADU; green/blue column medians are noise below this
 sat_leaf = lambda e: {"frac_max": e["sat_frac_max"]}
 
 KEYS = [{"from": "extension.name"}, {"from": "metadata.readout_mode"}]
@@ -143,6 +147,9 @@ def base_blocks():
                                  "background_region": "bottom_stripe", "min_signal": MIN_SIGNAL_NORM},
             "column_banding_norm": {"type": "column_structure_norm",
                                     "background_region": "bottom_stripe", "min_signal": MIN_SIGNAL_NORM},
+            # lamp frames: std of the per-column medians / lamp signal (vertical halo)
+            "vertical_smear": {"type": "vertical_smear",
+                               "background_region": "bottom_stripe", "min_signal": MIN_SIGNAL_SMEAR},
             # camera-warming: quarter-block median gradient / exposure time (ADU/s)
             "background_gradient_rate": {"type": "background_gradient_rate",
                                          "exptime_keys": ["SEXPTIME", "REXPTIME", "EXPTIME"],
@@ -289,6 +296,14 @@ def struct_rules(table, severity, gross=False, normalised=False):
     return rules
 
 
+def smear_rule(table, severity="FAIL"):
+    """Vertical halo / smear on lamp frames: std of the per-column median profile over
+    the lamp signal, against the per-detector heavy-tail cap in ``table`` (field max)."""
+    return {"name": "vertical_smear", "region": "full_frame", "metric": "vertical_smear",
+            "per_extension": True, "severity": severity,
+            "expected_from_lookup": {"table": table, "keys": KEYS, "max_field": "max"}}
+
+
 def sat_rule(table, severity):
     return {"name": "saturation_fraction", "region": "full_frame", "metric": "saturated_fraction",
             "per_extension": True, "severity": severity,
@@ -337,6 +352,10 @@ def build_cal_config():
             rules += [sat_rule(sa, "WARN"), sat_gross_rule()]
         else:
             rules += struct_rules(st, struct_sev, normalised=normalised)
+            if normalised:
+                sm = f"smear_{setname}"
+                lookup[sm] = build_table(pc, smear_leaf)
+                rules += [smear_rule(sm, "FAIL")]
             rules += [sat_rule(sa, "WARN")]
         rules += temp_rules()
         rule_sets[setname] = {"applies_when": {"exposure_type": pc}, "rules": rules}
@@ -395,7 +414,7 @@ def main():
 
     hdr = ("# LLAMAS %s QA config -- GENERATED from robust baseline analysis "
            "(2026-04-07/05-02/06-30; trimmed-mean structure profiles + MAD rms, WARN/FAIL tiers, 2026-09; "
-           "ThAr structure normalised by lamp signal, 2026-10). "
+           "ThAr structure normalised by lamp signal + vertical-smear rule, 2026-10). "
            "See docs/QA_CHECKS_CATALOGUE.md; regenerate via scripts/gen_configs.py.\n")
     dump(build_cal_config(), os.path.join(args.out_dir, "qa_config_cal.yaml"), hdr % "calibration")
     dump(build_science_config(), os.path.join(args.out_dir, "qa_config_science.yaml"), hdr % "science")

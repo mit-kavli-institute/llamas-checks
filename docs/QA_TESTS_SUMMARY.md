@@ -169,9 +169,26 @@ the same values passed. The ARC_THAR rules now use `row_structure_norm` / `colum
 = structure ÷ (full-frame mean − bottom-stripe median), caps from all 39 baseline arcs pooled over
 readout mode (ratio spread on a red row 0.06–0.16, cap 0.23; on a green row 0.23–0.30, cap 0.44).
 The 1 s FAST arcs sit at ≤ 0.7× cap; the 2026-07-10 odd arc `20-22-43.7` (streaked red lines) still
-FAILs at 1.3–1.75× cap on five red rows, while its over-bright but unstreaked successor `20-22-58.8`
-drops to WARN (0.85× cap). The rule SKIPs on a detector with < 2 ADU of signal. 3.A.Blue's fixed
+FAILs at 1.3–1.75× cap on five red rows, while its over-bright successor `20-22-58.8` passes the
+structure rules (0.85× cap). The rule SKIPs on a detector with < 2 ADU of signal. 3.A.Blue's fixed
 ~1415 ADU row banding is lamp-independent, so its normalised row cap is open.
+
+**Vertical smear (`vertical_smear`, ARC_THAR, FAIL).** Saturated lines are normal on an arc; the
+fault on the 2026-07-10 frames is the vertical halo around the lines. A curved narrow line occupies
+a small fraction of each column, so the per-column *median* stays at the background, while a halo
+fills whole columns and lifts it: the metric is std(per-column median) ÷ lamp signal, taken from the
+same sorted array as the column structure (no extra pixel pass). Over 47 normal arcs (35 baseline,
+8 commissioning, 4 of 2026-10-07; records ≥ 20 ADU) a red camera measures 0.022–0.07 (median 0.03)
+at any exposure, green 0.11–0.30, blue 0.23–0.37; the 2026-07-10 arcs measure 1.6–1.8 (43.7, every
+red) and 0.12–1.38 (58.8, every red), so both FAIL. Caps are max(median + 8 σ, 1.5 × p95) per
+detector, pooled over readout mode — robust rather than "1.5 × the worst frame", because one
+baseline arc (`Arcs/LLAMAS_2026-05-03_00-08-43.3`) has a saturated full-height column at x = 800 on
+2.B.Red (smear 0.57 against 0.04 on its siblings) and must not open that camera's cap; it is the one
+breach `aggregate_thresholds.py` reports, and exactly the kind of vertical feature the rule exists
+for. Below 20 ADU of signal the green/blue column medians are read-noise dominated (normal values
+drift up to 0.53), so the rule SKIPs there; the reds always have > 100 ADU. Also caught: the
+stuck-shutter 6.7 s arc `cals_test_run/2026-10-07_18-23-49.1` (bloomed reds, 0.56–0.84), on top of
+its shutter FAIL.
 
 ### SCIENCE (`SCI.R-*`)
 | Rule | Source | Threshold | Sev |

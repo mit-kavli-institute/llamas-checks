@@ -150,9 +150,9 @@ def test_tiered_rules_share_one_measurement(tmp_path, monkeypatch):
     calls = []
     original = QAEngine._compute_metric
 
-    def counting(region_data, metric, exptime=None):
+    def counting(region_data, metric, exptime=None, **kwargs):
         calls.append(metric["type"])
-        return original(region_data, metric, exptime=exptime)
+        return original(region_data, metric, exptime=exptime, **kwargs)
 
     monkeypatch.setattr(QAEngine, "_compute_metric", staticmethod(counting))
     report = QAEngine(CONFIG).run(write_mef(tmp_path))
