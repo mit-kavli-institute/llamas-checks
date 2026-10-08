@@ -76,9 +76,12 @@ for WARN/FAIL). One deliberate exception: a **system error still prints one line
 HDU is absent, in detector order), `identity_mismatches` (configured extensions whose header
 `BENCH`/`SIDE`/`COLOR` disagree with the position they occupy, as `{extension, hdu_index,
 header_identity}`) and `placeholder_extensions` (extensions present but constant-valued, taken from
-the engine results with status `PLACEHOLDER`; an empty list when no engine report was produced). It is
-present on every return path and is informational only: the structure block **never changes
-`status` or the exit code**. With `-v` it is printed as one `structure: …` line on stderr.
+the engine results with status `PLACEHOLDER`; an empty list when no engine report was produced), plus
+`cameras_down` / `cameras_down_source` (the allow-list of cameras permitted to be down and where it
+was read from). It is present on every return path and is informational only: the structure block
+**never changes `status` or the exit code**; the engine's per-camera `camera_present` results do
+(FAIL for an absent or placeholder camera not listed as down). With `-v` it is printed as one
+`structure: …` line on stderr.
 
 ## Frame types and selectors
 
@@ -108,8 +111,11 @@ are the per-detector bias/background reference on any frame type.
 | `top_stripe` | y[2020:2046], x[100:1948] |
 
 Missing cameras are constant-valued placeholder extensions (finite pixels with `nanmin == nanmax`
-at exactly 1, as in real frames, or exactly 0, as written by the pipeline validator) and are
-**skipped** (never failed). A constant frame at any other value (a railed detector at the ADC
+at exactly 1, as in real frames, or exactly 0, as written by the pipeline validator) or absent
+HDUs. Their pixel rules are **skipped**, and the per-camera `camera_present` check **fails** the
+frame for each such camera unless it is listed in `configs/camera_status.yaml` (`cameras_down:`,
+hand-edited when a camera is out for maintenance; overridable with `--cameras-down` or
+`LLAMAS_CHECKS_CAMERAS_DOWN`). A constant frame at any other value (a railed detector at the ADC
 ceiling, a dead readout at a pedestal) is *not* a placeholder and is evaluated normally.
 Off-mode frames (a readout mode not in a lookup table) **skip just that rule**, never crash
 the file.

@@ -41,7 +41,7 @@ llamas-checks /path/to/LLAMAS_..._mef.fits -v
 
 **Always use `-v` interactively.** Without it the tool is deliberately silent and reports only
 through its exit code. With `-v` you get a one-line verdict ending in the elapsed seconds, a
-`structure:` line (extensions present, missing cameras, placeholders), and a line for every check
+`structure:` line (extensions present, missing cameras, placeholders, cameras allowed to be down), and a line for every check
 that fired, naming the detector responsible.
 
 - `--report` writes the full per-check detail to `<frame>.qa.json` — the report has the same
@@ -155,11 +155,36 @@ on a bias means the frame is not usable as a bias, not that one detector is nois
   does not depend on the exposure time used.
 - Worked examples with images of frames that pass, warn and fail are in
   [`docs/QA_EXAMPLES.md`](docs/QA_EXAMPLES.md).
-- Cameras missing from the frame are skipped, never failed. A missing camera appears as a
-  placeholder extension (a constant frame of all-ones in real frames, all-zeros from the pipeline
-  validator; any other constant frame, e.g. a railed detector, is evaluated normally) or as an
-  absent HDU; both are
-  listed in the report's `structure` block.
+- **Every camera must deliver data.** A camera that is missing from the frame is a **FAIL**
+  (`camera_present@<detector>`, exit 2) unless it is listed as down (next section). A missing
+  camera appears as a placeholder extension (a constant frame of all-ones in real frames,
+  all-zeros from the pipeline validator; any other constant frame, e.g. a railed detector, is
+  evaluated normally) or as an absent HDU; both are listed in the report's `structure` block,
+  and the pixel rules on such a camera are skipped (status `PLACEHOLDER` / `MISSING`).
+
+### Cameras down for maintenance
+
+When a camera is out for repair, list it in
+[`llamas_checks/configs/camera_status.yaml`](llamas_checks/configs/camera_status.yaml) so its
+absence does not fail every frame:
+
+```yaml
+cameras_down:
+  - 1.A.Blue
+  - 4.A.Blue
+```
+
+Remove it again when the camera is back. The file is the only thing to edit; it is hand-written
+(not regenerated with the thresholds) and ships with the package, so on the observatory machine
+it lives in the installed package's `configs/` directory. A listed camera that *does* deliver
+data is simply checked like any other. A misspelt name is a system error (exit 3) naming the
+valid detectors, so a typo can never silently forgive nothing. For a one-off run, or for a GUI
+that would rather not edit files, the same list can be given as `--cameras-down 1.A.Blue,4.A.Blue`
+(`none` for no cameras down), as the `LLAMAS_CHECKS_CAMERAS_DOWN` environment variable, or as a
+`camera_status.yaml` inside the `--calib-root` directory; precedence is flag, environment,
+calib-root file, shipped file. The list in force is printed on the `-v` `structure:` line
+(`down (allowed): …`) and stored in the report (`structure.cameras_down`,
+`structure.cameras_down_source`, `report.cameras_down`).
 
 ### Science frames
 
@@ -246,12 +271,13 @@ Quiet by default: `0`/`1`/`2` print nothing; `3` always prints one line to stder
 ### `llamas-checks-engine` — one frame or a directory, explicit config
 
 ```
-llamas-checks-engine <file-or-dir> --config <yaml> [--jobs N] [--summary-only] [--no-validate]
+llamas-checks-engine <file-or-dir> --config <yaml> [--jobs N] [--summary-only] [--no-validate] [--cameras-down NAMES]
 ```
 
 `--config` takes a path, or the bare name of a shipped config (`qa_config_cal.yaml`,
 `qa_config_science.yaml`, `qa_config.yaml`). `--no-validate` skips the schema check of the
-config before the run. A `<name>.qa.json` is written next to every input frame.
+config before the run. `--cameras-down` overrides `configs/camera_status.yaml` the same way as
+for `llamas-checks`. A `<name>.qa.json` is written next to every input frame.
 
 | Exit | Meaning |
 |:--:|---|
@@ -291,7 +317,9 @@ editing or regenerating a YAML.
     "expected_extensions": 24,
     "missing_cameras": [],
     "identity_mismatches": [],
-    "placeholder_extensions": ["1.A.Blue", "2.A.Blue"]
+    "placeholder_extensions": ["1.A.Blue", "2.A.Blue"],
+    "cameras_down": ["1.A.Blue", "2.A.Blue"],
+    "cameras_down_source": "/path/to/site-packages/llamas_checks/configs/camera_status.yaml"
   },
   "report": { "...the full engine report: metadata, active_rule_sets, results[]..." }
 }
@@ -312,8 +340,11 @@ present (`len(hdul) - 1`), `expected_extensions` is 24, `missing_cameras` lists 
 extensions whose header `BENCH`/`SIDE`/`COLOR` disagree with the position they occupy
 (`{extension, hdu_index, header_identity}`), and `placeholder_extensions` lists extensions
 that are present but constant-valued (from the engine results with status `PLACEHOLDER`; empty
-when no engine report was produced). It is informational: **the structure block never changes
-`status` or the exit code.**
+when no engine report was produced), and `cameras_down` / `cameras_down_source` the allow-list
+in force and where it came from. It is informational: **the structure block never changes
+`status` or the exit code.** What does is the engine's `camera_present` check, one result per
+configured camera in `report.results` (rule set `STRUCTURE`, `measured_value` 1 = data present,
+0 = absent or placeholder, FAIL unless the camera is in `report.cameras_down`).
 
 The engine's own `<frame>.qa.json` (written by `llamas-checks-engine`) is the inner `report`
 object on its own: `fits_file`, `instrument`, `metadata`, `active_rule_sets`, `overall_verdict`,
@@ -360,7 +391,10 @@ missing/placeholder cameras — pass `--report <night log dir>` (or `--report-di
 creates the directory) and read `<night log dir>/<frame>.qa.json`, laid out as described above. The file exists only when the
 frame warned or failed (exit `1` or `2`); on exit `0` there is nothing to read, unless the GUI
 also passes `--report-all`. Do not give the GUI `llamas-checks-engine`: its exit codes mean
-different things and it writes reports into the raw data directory.
+different things and it writes reports into the raw data directory. When a camera is down for
+maintenance, nothing changes in the GUI: an operator lists it in the installed
+`configs/camera_status.yaml` (see "Cameras down for maintenance"), or the GUI passes
+`--cameras-down <names>` itself.
 
 If the GUI imposes a timeout, size it by frame type rather than by verdict: biases and darks
 have the most pixel checks, science frames the fewest, and a failing frame is no slower than a
@@ -436,7 +470,8 @@ llamas_checks/                 the package
   qa_config_validator.py       config schema check + `llamas-checks-validate` CLI
   validate.py                  MEF structure inspection (inspect_structure, detector_label)
   paths.py                     CONFIG_DIR, BASELINES_DIR, shipped config names
-  configs/                     qa_config.yaml (base), qa_config_cal.yaml, qa_config_science.yaml (generated)
+  configs/                     qa_config.yaml (base), qa_config_cal.yaml, qa_config_science.yaml (generated),
+                               camera_status.yaml (hand-edited: cameras allowed to be down)
   baselines/                   qa_stats_raw.json (per-extension baseline stats), qa_thresholds_derived.json, qa_tracking_baselines.csv
 scripts/                       threshold pipeline + validation + doc generators (see above)
 tests/                         pytest suite

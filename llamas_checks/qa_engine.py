@@ -19,6 +19,14 @@ Running:
   (e.g. ``qa_config_cal.yaml``) which is resolved against the package
   ``configs/`` directory.
 
+Camera presence:
+- Every configured camera must deliver data. A camera whose HDU is absent or
+  whose image is a constant placeholder (every pixel 0 or 1 = not read out)
+  FAILs the ``camera_present`` check unless it is listed in
+  ``configs/camera_status.yaml`` (``cameras_down:``), the file observers edit
+  when a camera is out for maintenance. ``--cameras-down`` / the
+  ``LLAMAS_CHECKS_CAMERAS_DOWN`` environment variable override that file.
+
 Output:
 - Every processed FITS file gets a ``<stem>.qa.json`` sidecar written next to
   it (an error report if the file could not be evaluated).
@@ -32,6 +40,7 @@ import argparse
 import concurrent.futures
 import fnmatch
 import json
+import os
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -90,12 +99,125 @@ class LookupMissError(QAEngineError):
     Treated as a benign SKIP for that one rule+extension (e.g. an off-mode frame
     whose readout mode is not modelled), rather than an ERROR that aborts the file.
     """
- 
- 
+
+
+# ---------------------------------------------------------------------------
+# Cameras allowed to be down (missing HDU or placeholder image without a FAIL).
+# The list lives in a small hand-edited YAML next to the generated QA configs so
+# it survives regeneration and can be changed without touching code.
+# ---------------------------------------------------------------------------
+CAMERA_STATUS_NAME = "camera_status.yaml"
+DEFAULT_CAMERA_STATUS = CONFIG_DIR / CAMERA_STATUS_NAME
+CAMERAS_DOWN_ENV = "LLAMAS_CHECKS_CAMERAS_DOWN"
+CAMERA_PRESENT_RULE = "camera_present"
+_NO_CAMERAS_DOWN_WORDS = {"", "none", "[]"}
+
+
+def parse_cameras_down(text: str | None) -> list[str]:
+    """Split a ``--cameras-down`` / environment value into detector names.
+
+    Comma, semicolon or whitespace separated; ``""``, ``none`` and ``[]`` mean
+    no cameras down. Names are returned as written (validated later against the
+    config's extension names).
+    """
+    if text is None:
+        return []
+    cleaned = text.strip()
+    if cleaned.lower() in _NO_CAMERAS_DOWN_WORDS:
+        return []
+    for sep in (",", ";"):
+        cleaned = cleaned.replace(sep, " ")
+    return [part for part in cleaned.split() if part]
+
+
+def load_cameras_down(path: Path | str | None = None) -> list[str]:
+    """Read ``cameras_down:`` from a camera status YAML (the shipped one by default).
+
+    The file must be a mapping whose ``cameras_down`` entry is a list of detector
+    names (``null`` / ``[]`` for none). Anything else raises ``QAEngineError`` so
+    a typo in the file is a loud system error rather than a silently ignored list.
+    """
+    status_path = Path(path) if path is not None else DEFAULT_CAMERA_STATUS
+    if not status_path.is_file():
+        raise QAEngineError(f"camera status file not found: {status_path}")
+    try:
+        with status_path.open("r", encoding="utf-8") as handle:
+            content = yaml.safe_load(handle)
+    except yaml.YAMLError as exc:
+        raise QAEngineError(f"YAML syntax error in {status_path}: {exc}") from exc
+    if content is None:  # comments only: nothing down
+        return []
+    if not isinstance(content, dict) or "cameras_down" not in content:
+        raise QAEngineError(
+            f"{status_path}: expected a mapping with a 'cameras_down' list"
+        )
+    names = content["cameras_down"]
+    if names is None:
+        return []
+    if isinstance(names, str):
+        names = parse_cameras_down(names)
+    if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
+        raise QAEngineError(
+            f"{status_path}: 'cameras_down' must be a list of detector names "
+            "(e.g. [1.A.Blue, 4.A.Blue]) or []"
+        )
+    return [name.strip() for name in names if name.strip()]
+
+
+def resolve_cameras_down(cli_value: str | None = None,
+                         calib_root: str | Path | None = None) -> tuple[list[str], str]:
+    """Pick the cameras-down list and say where it came from.
+
+    Precedence: an explicit value (``--cameras-down``), then the
+    ``LLAMAS_CHECKS_CAMERAS_DOWN`` environment variable, then
+    ``<calib_root>/camera_status.yaml`` when a calib root is given and has one,
+    then the shipped ``configs/camera_status.yaml``. Returns ``(names, source)``
+    with ``source`` one of ``"cli"``, ``"env"`` or the file path read.
+    """
+    if cli_value is not None:
+        return parse_cameras_down(cli_value), "cli"
+    env_value = os.environ.get(CAMERAS_DOWN_ENV)
+    if env_value is not None:
+        return parse_cameras_down(env_value), "env"
+    if calib_root is not None:
+        candidate = Path(calib_root).expanduser() / CAMERA_STATUS_NAME
+        if candidate.is_file():
+            return load_cameras_down(candidate), str(candidate)
+    return load_cameras_down(DEFAULT_CAMERA_STATUS), str(DEFAULT_CAMERA_STATUS)
+
+
+def canonical_cameras_down(names: list[str] | tuple[str, ...] | set[str],
+                           extensions: list[dict[str, Any]],
+                           source: str = "cameras-down list") -> list[str]:
+    """Map down-camera names onto the configured extension names (case-insensitive).
+
+    Returns the canonical names in detector order. Unknown names raise
+    ``QAEngineError`` naming them and the valid choices, so a misspelt camera can
+    never silently forgive nothing.
+    """
+    by_key = {QAEngine.normalize(ext["name"]): ext["name"] for ext in extensions}
+    unknown = sorted({name for name in names if QAEngine.normalize(name) not in by_key})
+    if unknown:
+        raise QAEngineError(
+            f"{source}: unknown camera name(s) {', '.join(unknown)}; "
+            f"valid names are {', '.join(ext['name'] for ext in extensions)}"
+        )
+    wanted = {QAEngine.normalize(name) for name in names}
+    return [ext["name"] for ext in extensions if QAEngine.normalize(ext["name"]) in wanted]
+
+
 class QAEngine:
-    def __init__(self, config: dict[str, Any]):
+    def __init__(self, config: dict[str, Any],
+                 cameras_down: list[str] | tuple[str, ...] | set[str] | None = None):
+        """``cameras_down``: detector names allowed to be missing or placeholder
+        without failing; ``None`` reads the shipped ``configs/camera_status.yaml``.
+        """
         self.config = config
- 
+        if cameras_down is None:
+            cameras_down = load_cameras_down()
+        self.cameras_down = canonical_cameras_down(cameras_down, config["extensions"])
+        self._cameras_down_keys = {self.normalize(name) for name in self.cameras_down}
+
     @staticmethod
     def normalize(value: Any) -> str:
         """Normalize metadata values and lookup keys for robust comparison."""
@@ -114,7 +236,10 @@ class QAEngine:
         with fits.open(fits_path, memmap=False) as hdul:
             metadata = self._extract_metadata(hdul)
             active_rule_sets = self._select_rule_sets(metadata)
-            results: list[RuleResult] = []
+            # Camera presence is structural, so it is checked for every frame
+            # type (even one no rule set matches). It reuses the per-HDU
+            # placeholder test the pixel rules need anyway, so it adds no work.
+            results: list[RuleResult] = self._camera_presence_results(hdul)
 
             if not active_rule_sets:
                 results.append(self._no_rules_matched_result(metadata))
@@ -146,10 +271,65 @@ class QAEngine:
             "instrument": self.config.get("instrument", {}),
             "metadata": metadata,
             "active_rule_sets": list(active_rule_sets.keys()),
+            "cameras_down": list(self.cameras_down),
             "overall_verdict": verdict,
             "summary": self._summary(results),
             "results": [asdict(result) for result in results],
         }
+
+    def _camera_presence_results(self, hdul: Any) -> list[RuleResult]:
+        """One ``camera_present`` result per configured camera.
+
+        A camera whose HDU is absent, has no image, or holds a placeholder image
+        (constant 0/1 = not read out) FAILs unless it is in ``cameras_down``; a
+        listed camera passes with a note, and a listed camera that did deliver
+        data is simply evaluated like any other (no warning). ``measured_value``
+        is 1 when data is present, 0 otherwise, against ``min: 1``.
+        """
+        results: list[RuleResult] = []
+        for extension in self.config["extensions"]:
+            name = extension.get("name")
+            hdu_index = extension["hdu_index"]
+            listed = self.normalize(name) in self._cameras_down_keys
+            absent_reason: str | None = None
+            if hdu_index >= len(hdul):
+                absent_reason = f"HDU {hdu_index} is absent from the file"
+            else:
+                data = getattr(hdul[hdu_index], "data", None)
+                if data is None:
+                    absent_reason = f"HDU {hdu_index} has no image data"
+                elif self._placeholder_for_hdu(hdu_index, data):
+                    absent_reason = (f"HDU {hdu_index} is a placeholder image "
+                                     "(constant frame, camera not read out)")
+            if absent_reason is None:
+                passed = True
+                message = ("camera delivered data"
+                           + ("; listed as down but evaluated normally" if listed else ""))
+            elif listed:
+                passed = True
+                message = (f"camera {name} {absent_reason}; listed as down in "
+                           f"{CAMERA_STATUS_NAME}, its checks are skipped")
+            else:
+                passed = False
+                message = (f"camera {name} {absent_reason} and is not listed as down "
+                           f"in {CAMERA_STATUS_NAME}")
+            results.append(RuleResult(
+                rule_set="STRUCTURE",
+                rule=CAMERA_PRESENT_RULE,
+                extension=name,
+                hdu_index=hdu_index,
+                region="full_frame",
+                metric=CAMERA_PRESENT_RULE,
+                measured_value=0.0 if absent_reason else 1.0,
+                passed=passed,
+                severity="FAIL",
+                verdict_effect="PASS" if passed else "FAIL",
+                limits={"min": 1.0},
+                lookup_path=None,
+                status="EVALUATED",
+                message=message,
+            ))
+        return results
  
     def _extract_metadata(self, hdul: Any) -> dict[str, Any]:
         metadata: dict[str, Any] = {}
@@ -379,8 +559,9 @@ class QAEngine:
         Any other constant frame (e.g. a railed detector at the ADC ceiling, or
         a dead readout at a non-zero pedestal) is *not* a placeholder and is
         evaluated normally, so saturation/structure rules can still fire on it.
-        Placeholder extensions are reported but skipped from metric evaluation
-        and do not affect the final PASS/WARN/FAIL verdict.
+        Placeholder extensions are skipped by the metric rules (status
+        PLACEHOLDER); whether they fail the frame is decided once per camera by
+        the ``camera_present`` check against ``cameras_down``.
         """
         array = np.asarray(data)
         if array.size == 0:
@@ -988,20 +1169,22 @@ def collect_fits_files(directory: Path) -> list[Path]:
     return sorted(files)
  
  
-def run_single_file(fits_file: Path, config_path: Path, no_validate: bool = False) -> dict[str, Any]:
+def run_single_file(fits_file: Path, config_path: Path, no_validate: bool = False,
+                    cameras_down: list[str] | None = None) -> dict[str, Any]:
     config = load_yaml(config_path)
     if not no_validate:
         validate_config(config, config_path)
-    engine = QAEngine(config)
+    engine = QAEngine(config, cameras_down=cameras_down)
     return engine.run(fits_file)
- 
- 
-def _batch_worker(args: tuple[str, str, bool]) -> dict[str, Any]:
-    fits_file_s, config_path_s, no_validate = args
+
+
+def _batch_worker(args: tuple[str, str, bool, list[str] | None]) -> dict[str, Any]:
+    fits_file_s, config_path_s, no_validate, cameras_down = args
     fits_file = Path(fits_file_s)
     config_path = Path(config_path_s)
     try:
-        report = run_single_file(fits_file, config_path, no_validate=no_validate)
+        report = run_single_file(fits_file, config_path, no_validate=no_validate,
+                                 cameras_down=cameras_down)
         return {
             "fits_file": str(fits_file),
             "status": "OK",
@@ -1017,17 +1200,18 @@ def _batch_worker(args: tuple[str, str, bool]) -> dict[str, Any]:
         }
  
  
-def run_batch(input_dir: Path, config_path: Path, jobs: int, no_validate: bool = False) -> dict[str, Any]:
+def run_batch(input_dir: Path, config_path: Path, jobs: int, no_validate: bool = False,
+              cameras_down: list[str] | None = None) -> dict[str, Any]:
     files = collect_fits_files(input_dir)
     if not files:
         raise QAEngineError(f"no FITS files found in directory: {input_dir}")
- 
+
     # Validate once in the parent process for fast feedback before starting workers.
     if not no_validate:
         config = load_yaml(config_path)
         validate_config(config, config_path)
- 
-    worker_args = [(str(path), str(config_path), no_validate) for path in files]
+
+    worker_args = [(str(path), str(config_path), no_validate, cameras_down) for path in files]
     max_workers = max(1, int(jobs))
  
     results: list[dict[str, Any]] = []
@@ -1098,7 +1282,13 @@ def main() -> int:
                         help="Skip config validation before running")
     parser.add_argument("--summary-only", action="store_true",
                         help="Print quick human-readable summary")
+    parser.add_argument("--cameras-down", default=None, metavar="NAMES",
+                        help="comma-separated detector names allowed to be missing or "
+                             "placeholder (e.g. 1.A.Blue,4.A.Blue; 'none' for none); "
+                             f"overrides configs/{CAMERA_STATUS_NAME} and the "
+                             f"{CAMERAS_DOWN_ENV} environment variable")
     args = parser.parse_args()
+    cameras_down = resolve_cameras_down(args.cameras_down)[0]
 
     # A bare config name (e.g. "qa_config_cal.yaml", no directory part) resolves
     # to the shipped copy; any path with a directory component is used as given,
@@ -1118,7 +1308,8 @@ def main() -> int:
                 report = run_single_file(
                     input_path,
                     args.config,
-                    no_validate=args.no_validate
+                    no_validate=args.no_validate,
+                    cameras_down=cameras_down,
                 )
                 verdict = report["overall_verdict"]
  
@@ -1151,7 +1342,8 @@ def main() -> int:
                 input_path,
                 args.config,
                 jobs=args.jobs,
-                no_validate=args.no_validate
+                no_validate=args.no_validate,
+                cameras_down=cameras_down,
             )
  
             any_fail = False

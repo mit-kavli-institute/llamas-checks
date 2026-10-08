@@ -240,6 +240,19 @@ def test_check_image_reports_placeholder_extensions(tmp_path):
     result = check_image(path, qa_yaml=write_config(tmp_path, exts))
     assert result["structure"]["placeholder_extensions"] == ["1.A.Blue"]
     assert result["structure"]["missing_cameras"] == []
+    assert result["structure"]["cameras_down"] == []
+    # A placeholder camera that is not listed as down fails the frame.
+    assert result["status"] == "fail"
+    assert result["message"] == "FAIL: 1 fail check(s): camera_present@1.A.Blue"
+
+
+def test_check_image_forgives_placeholder_listed_as_down(tmp_path):
+    path = make_mef(tmp_path, "ph.fits", placeholder=(3,))
+    exts = [e for e in full_extensions() if e["name"] in ("1.A.Red", "1.A.Blue")]
+    result = check_image(path, qa_yaml=write_config(tmp_path, exts), cameras_down="1.A.Blue")
+    assert result["structure"]["placeholder_extensions"] == ["1.A.Blue"]
+    assert result["structure"]["cameras_down"] == ["1.A.Blue"]
+    assert result["structure"]["cameras_down_source"] == "cli"
     assert result["status"] == "pass"
 
 

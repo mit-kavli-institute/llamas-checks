@@ -73,16 +73,21 @@ config and writes a `<frame>.qa.json` beside every frame; its exit codes are 0 =
 - Regions: `full_frame`; `bottom_stripe` = rows 2–28 × columns 100–1948 (unilluminated, used as the
   per-detector bias reference on every frame type); `top_stripe` = rows 2020–2046, same columns.
 - A missing camera is a **placeholder** extension: every pixel constant at 1 (real frames) or 0
-  (pipeline-generated). Placeholders are skipped by every pixel rule and are listed, never failed.
-  A frame with a genuinely constant but non-0/1 detector (e.g. railed at 65535) is *not* a
-  placeholder and is evaluated normally.
+  (pipeline-generated), or an absent HDU. Placeholders are skipped by every pixel rule, but the
+  per-camera `camera_present` check (rule set `STRUCTURE`, severity FAIL) **fails the frame**
+  for every camera that is absent or placeholder unless that camera is listed in
+  `configs/camera_status.yaml` (`cameras_down:`), the hand-edited file for cameras out for
+  maintenance (also `--cameras-down` / `LLAMAS_CHECKS_CAMERAS_DOWN`). A listed camera that
+  delivers data is evaluated normally. A frame with a genuinely constant but non-0/1 detector
+  (e.g. railed at 65535) is *not* a placeholder and is evaluated normally.
 - A rule whose header keyword is absent, or whose lookup table has no entry for this detector and
   readout mode, is **SKIPPED** for that detector only. A rule that cannot be computed (bad region,
   unreadable data) gives an **ERROR** verdict, which `llamas-checks` reports as fail (exit 2), never
   as pass.
 - Every result also carries a `structure` block: number of extensions, cameras whose HDU is absent,
-  placeholder detectors, and any extension whose `BENCH`/`SIDE`/`COLOR` header disagrees with the
-  position the config expects. It is informational and never changes the verdict.
+  placeholder detectors, the cameras-down list in force, and any extension whose
+  `BENCH`/`SIDE`/`COLOR` header disagrees with the position the config expects. It is
+  informational and never changes the verdict (the `camera_present` results do).
 
 ## 3. Check catalogue, by rule set
 
@@ -242,8 +247,12 @@ today the passing cases would write no file without `--report-all`). Paths:
 - **S07** = `/Users/slh/Library/CloudStorage/Box-Box/slhughes/Llamas_Commissioning_Data/20260907_08`
 
 Every frame below except the CAL0 ones has two placeholder cameras, `1.A.Blue` and `4.A.Blue`
-(22 live detectors). The CAL0 frames from the incident night have all 24 extensions as placeholders,
-so only the header checks run on them; they are still useful shutter cases.
+(22 live detectors; those cameras were out for repair at the time). The CAL0 frames from the
+incident night have all 24 extensions as placeholders, so only the header checks run on them;
+they are still useful shutter cases. Since the `camera_present` check was added (October 2026,
+all 24 cameras back in service) these frames FAIL on their placeholder cameras unless
+`1.A.Blue` and `4.A.Blue` are listed as down (`--cameras-down 1.A.Blue,4.A.Blue`); the verdicts
+below are for the pixel and header checks alone.
 
 ### 6.1 Shutter faults → FAIL (exit 2)
 

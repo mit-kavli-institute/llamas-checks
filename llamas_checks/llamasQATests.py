@@ -13,7 +13,11 @@
 
 The structure report is attached as ``result["structure"]`` on every return
 path (with ``placeholder_extensions`` taken from the engine's PLACEHOLDER
-results). It is informational only and never changes ``status``.
+results and ``cameras_down`` the allow-list in force). It is informational
+only and never changes ``status``; what does is the engine's per-camera
+``camera_present`` check: a camera that is absent or a placeholder FAILs
+unless it is listed in ``configs/camera_status.yaml`` (or ``--cameras-down`` /
+``LLAMAS_CHECKS_CAMERAS_DOWN``, see ``qa_engine.resolve_cameras_down``).
 
 Failure model:
 - *System* problems (missing file/config, invalid config, astropy absent)
@@ -46,7 +50,7 @@ from typing import Any
 from .paths import CAL_CONFIG_NAME, CONFIG_DIR, DEFAULT_CONFIG_NAME, SCIENCE_CONFIG_NAME
 from .qa_config_validator import QAConfigValidator
 from .qa_engine import (FITS_SUFFIXES, QAEngine, QAEngineError, fits as _fits, load_yaml,
-                        report_path_for)
+                        report_path_for, resolve_cameras_down)
 from .validate import inspect_structure
 
 _VERDICT_TO_STATUS = {"PASS": "pass", "WARN": "warn", "FAIL": "fail"}
@@ -61,13 +65,21 @@ def check_image(
     verbose: bool = False,
     report_dir: str | None = None,
     report_all: bool = False,
+    cameras_down: str | None = None,
 ) -> dict[str, Any]:
     """Run the QA suite on a single calibration or science FITS/MEF image.
 
     Returns a dict with at least ``status`` ("pass"|"warn"|"fail"),
     ``message``, ``report_path`` (the JSON file written, or None) and
     ``elapsed_s`` (wall-clock seconds spent in this call, report write included).
-    Raises ``QAEngineError`` on system-level problems.
+    Raises ``QAEngineError`` on system-level problems (including an unknown
+    camera name in the cameras-down list).
+
+    ``cameras_down`` is a comma-separated list of detectors allowed to be
+    missing or placeholder (``"none"`` for none); ``None`` falls back to the
+    ``LLAMAS_CHECKS_CAMERAS_DOWN`` environment variable, then
+    ``<calib_root>/camera_status.yaml``, then the shipped
+    ``configs/camera_status.yaml``.
 
     Set ``LLAMAS_CHECKS_TIMING=1`` to print a per-stage timing line to stderr.
     """
@@ -82,12 +94,17 @@ def check_image(
     config_path = _resolve_config_path(qa_yaml, calib_root, suite, image_path)
     config = load_yaml(config_path)
     _validate_config(config, config_path)
+    # Cameras allowed to be down: a bad list (unknown name, malformed file) is a
+    # system problem, so it raises here like an invalid config would.
+    down_names, down_source = resolve_cameras_down(cameras_down, calib_root)
+    engine = QAEngine(config, cameras_down=down_names)
     stages.mark("config")
 
     structure = _inspect_structure(image_path, config.get("extensions"))
+    structure["cameras_down"] = list(engine.cameras_down)
+    structure["cameras_down_source"] = down_source
     stages.mark("structure")
 
-    engine = QAEngine(config)
     try:
         engine_report = engine.run(image_path)
     except QAEngineError as exc:
@@ -182,6 +199,7 @@ def _inspect_structure(image_path: Path, extensions: list[dict[str, Any]] | None
                      "missing_cameras": [], "identity_mismatches": [],
                      "error": f"{type(exc).__name__}: {exc}"}
     structure["placeholder_extensions"] = []
+    structure["cameras_down"] = []
     return structure
 
 
@@ -194,7 +212,8 @@ def _print_structure(structure: dict[str, Any]) -> None:
     line = (f"structure: {structure['n_extensions']}/{structure['expected_extensions']} "
             f"extensions; missing: {fmt(structure['missing_cameras'])}; "
             f"placeholder: {fmt(structure['placeholder_extensions'])}; "
-            f"identity mismatches: {fmt(mismatches)}")
+            f"identity mismatches: {fmt(mismatches)}; "
+            f"down (allowed): {fmt(structure.get('cameras_down', []))}")
     if structure.get("error"):
         line += f"; error: {structure['error']}"
     print(line, file=sys.stderr)
@@ -293,7 +312,7 @@ def _result(
         "fits_file": str(image_path),
         "structure": structure if structure is not None else {
             "n_extensions": None, "expected_extensions": None, "missing_cameras": [],
-            "identity_mismatches": [], "placeholder_extensions": []},
+            "identity_mismatches": [], "placeholder_extensions": [], "cameras_down": []},
         "report_path": None,
     }
     if engine_report is not None:

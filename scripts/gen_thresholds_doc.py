@@ -167,7 +167,8 @@ def main() -> int:
         "`edge_saturated` (bottom-stripe median > 63000 ADU) and, on BIAS/DARK, `saturation_gross` "
         "(> 1 % of pixels above 63000 ADU). \"—\" means that readout mode is not modelled for "
         "that detector (the rule is SKIPPED, never failed). A missing camera in a frame is a placeholder "
-        "extension and is skipped.",
+        "extension: its pixel rules are skipped and the frame FAILs `camera_present` for it unless the "
+        "camera is listed in `configs/camera_status.yaml`.",
         "",
     ]
     doc += shutter_section(derived)

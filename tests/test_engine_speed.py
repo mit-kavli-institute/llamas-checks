@@ -159,7 +159,8 @@ def test_tiered_rules_share_one_measurement(tmp_path, monkeypatch):
 
     # 2 extensions x 2 distinct (region, metric) pairs, although 4 rules were evaluated.
     assert sorted(calls) == ["median", "median", "row_structure", "row_structure"]
-    assert report["summary"]["evaluated_checks"] == 8
+    # 4 rules x 2 extensions, plus one camera_present result per extension.
+    assert report["summary"]["evaluated_checks"] == 10
     for ext in ("1.A.Green", "1.A.Blue"):
         by_rule = {r["rule"]: r for r in report["results"] if r["extension"] == ext}
         assert by_rule["edge_background_level"]["measured_value"] == by_rule["edge_saturated"]["measured_value"]
@@ -188,6 +189,24 @@ def test_caches_are_reset_between_runs(tmp_path):
     assert first["fits_file"] != second["fits_file"]
     assert len(engine._metric_cache) == 4                  # only the second run's entries
     assert len(engine._placeholder_cache) == 2
+
+
+def test_camera_presence_check_adds_no_pixel_work(tmp_path, monkeypatch):
+    """The camera_present check reuses the cached placeholder test: exactly one
+    placeholder evaluation per HDU per run, and no extra metric measurements."""
+    placeholder_calls = []
+    original = QAEngine._is_placeholder_data
+
+    def counting(data):
+        placeholder_calls.append(1)
+        return original(data)
+
+    monkeypatch.setattr(QAEngine, "_is_placeholder_data", staticmethod(counting))
+    engine = QAEngine(CONFIG)
+    report = engine.run(write_mef(tmp_path))
+    assert len(placeholder_calls) == len(CONFIG["extensions"])
+    assert len(engine._metric_cache) == 4
+    assert sum(1 for r in report["results"] if r["rule"] == "camera_present") == 2
 
 
 # ---------------------------------------------------------------- elapsed-time reporting

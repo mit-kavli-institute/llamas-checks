@@ -1,0 +1,24 @@
+# Cameras allowed to be absent from a frame WITHOUT failing QA.
+#
+# A camera that is missing from a frame (absent HDU) or that delivered a
+# constant placeholder image (every pixel 0 or 1 = camera not read out) is a
+# FAIL unless it is listed here. Edit this file when a camera is taken down for
+# maintenance or repair; remove it again when it is back. A camera listed here
+# that does deliver data is still checked normally.
+#
+# Names are the detector labels used everywhere else (bench.side.colour):
+#   1.A.Red 1.A.Green 1.A.Blue 1.B.Red 1.B.Green 1.B.Blue
+#   2.A.Red 2.A.Green 2.A.Blue 2.B.Red 2.B.Green 2.B.Blue
+#   3.A.Red 3.A.Green 3.A.Blue 3.B.Red 3.B.Green 3.B.Blue
+#   4.A.Red 4.A.Green 4.A.Blue 4.B.Red 4.B.Green 4.B.Blue
+#
+# Example, with two cameras out for repair:
+#   cameras_down:
+#     - 1.A.Blue
+#     - 4.A.Blue
+#
+# Overrides, for a one-off run without editing this file:
+#   llamas-checks <frame> --cameras-down 1.A.Blue,4.A.Blue   (or "none")
+#   LLAMAS_CHECKS_CAMERAS_DOWN=1.A.Blue,4.A.Blue llamas-checks <frame>
+#   a camera_status.yaml inside the --calib-root directory
+cameras_down: []

@@ -40,6 +40,12 @@ def main():
     parser.add_argument("--report-all", action="store_true",
                         help="also write a report when the frame passes; by default a "
                              "report is written only for warn and fail (no file = pass)")
+    parser.add_argument("--cameras-down", default=None, metavar="NAMES",
+                        help="comma-separated detector names allowed to be missing or "
+                             "placeholder without failing (e.g. 1.A.Blue,4.A.Blue; 'none' "
+                             "for none). Overrides the LLAMAS_CHECKS_CAMERAS_DOWN "
+                             "environment variable and camera_status.yaml (looked up in "
+                             "--calib-root, then the shipped configs/)")
     parser.add_argument(
         "--verbose", "-v", action="store_true",
         help="print the result summary (with the elapsed seconds) and failing-rule "
@@ -59,6 +65,7 @@ def main():
             verbose=args.verbose,
             report_dir=args.report_dir,
             report_all=args.report_all,
+            cameras_down=args.cameras_down,
         )
     except Exception as exc:
         # Exactly one stderr line, even for multi-line messages (validator
