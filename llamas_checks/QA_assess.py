@@ -42,9 +42,10 @@ def main():
                              "report is written only for warn and fail (no file = pass)")
     parser.add_argument(
         "--verbose", "-v", action="store_true",
-        help="print the result summary and failing-rule detail; by default the tool "
-             "is quiet and signals only through its exit code "
-             "(0=pass, 1=warn, 2=fail, 3=system error).",
+        help="print the result summary (with the elapsed seconds) and failing-rule "
+             "detail; by default the tool is quiet and signals only through its exit "
+             "code (0=pass, 1=warn, 2=fail, 3=system error). Set LLAMAS_CHECKS_TIMING=1 "
+             "for a per-stage timing line on stderr.",
     )
     args = parser.parse_args()
 
@@ -73,6 +74,8 @@ def main():
     # check_image prints). A system error still reported above (exit 3), regardless.
     if args.verbose:
         message = results.get("message", status)
+        if results.get("elapsed_s") is not None:
+            message = f"{message} ({results['elapsed_s']:.2f} s)"
         print(message, file=sys.stdout if status == "pass" else sys.stderr)
         if results.get("report_path"):
             print(f"report: {results['report_path']}", file=sys.stderr)

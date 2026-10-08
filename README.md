@@ -40,8 +40,9 @@ llamas-checks /path/to/LLAMAS_..._mef.fits -v
 ```
 
 **Always use `-v` interactively.** Without it the tool is deliberately silent and reports only
-through its exit code. With `-v` you get a one-line verdict, a `structure:` line (extensions present, missing
-cameras, placeholders), and a line for every check that fired, naming the detector responsible.
+through its exit code. With `-v` you get a one-line verdict ending in the elapsed seconds, a
+`structure:` line (extensions present, missing cameras, placeholders), and a line for every check
+that fired, naming the detector responsible.
 
 - `--report` writes the full per-check detail to `<frame>.qa.json` — the report has the same
   name as the frame it describes (`LLAMAS_..._CAL22_mef.fits` → `LLAMAS_..._CAL22_mef.qa.json`),
@@ -53,6 +54,13 @@ cameras, placeholders), and a line for every check that fired, naming the detect
   report for passing frames.
 - **Exit codes: `0` pass, `1` warn, `2` fail, `3` system error.**
 - It takes one frame at a time. Pointed at a directory it exits `3`.
+- **How long it takes depends on the frame type, not on the verdict.** A failing frame costs the
+  same as a passing frame of the same type. Science frames have the fewest pixel checks; biases
+  and darks the most (on a laptop: ~0.7 s for a science frame, ~1.5 s for a bias, dominated by
+  reading the 200 MB file and sorting/histogramming each 4-Mpix detector). If a machine is much
+  slower than that, run with `LLAMAS_CHECKS_TIMING=1` to get a per-stage line on stderr
+  (`timing: <frame> <status> total=… config=… structure=… engine=… report=…`); the JSON report
+  and the Python result also carry the total as `elapsed_s`.
 
 ## Checking a whole night
 
@@ -273,6 +281,7 @@ editing or regenerating a YAML.
   "suite": "basic_cal",
   "fits_file": "/path/to/LLAMAS_..._mef.fits",
   "report_path": "/path/to/reports/LLAMAS_..._mef.qa.json",
+  "elapsed_s": 1.42,
   "overall_verdict": "WARN",
   "summary": {"total_checks": 190, "evaluated_checks": 154, "skipped_checks": 36,
               "passed_checks": 152, "failed_checks": 2, "fail_effects": 0, "warn_effects": 2,
@@ -289,7 +298,9 @@ editing or regenerating a YAML.
 ```
 
 `status` (`pass`/`warn`/`fail`) is what the exit code is derived from. `report_path` is the file
-this JSON was written to (`null` in the returned dict when nothing was written). `overall_verdict`,
+this JSON was written to (`null` in the returned dict when nothing was written). `elapsed_s` is the
+wall-clock time of the whole check in seconds (in the file, as of the moment it was written).
+`overall_verdict`,
 `summary` and `report` are present whenever the engine ran; `report.results` is the per-rule list
 (`rule`, `extension`, `hdu_index`, `measured_value`, `limits`, `passed`, `severity`,
 `verdict_effect`, `status` = `EVALUATED`/`SKIPPED`/`PLACEHOLDER`/`MISSING`/`ERROR`, `message`).
@@ -350,6 +361,12 @@ creates the directory) and read `<night log dir>/<frame>.qa.json`, laid out as d
 frame warned or failed (exit `1` or `2`); on exit `0` there is nothing to read, unless the GUI
 also passes `--report-all`. Do not give the GUI `llamas-checks-engine`: its exit codes mean
 different things and it writes reports into the raw data directory.
+
+If the GUI imposes a timeout, size it by frame type rather than by verdict: biases and darks
+have the most pixel checks, science frames the fewest, and a failing frame is no slower than a
+passing one of the same type. To see where the time goes on the GUI machine, set
+`LLAMAS_CHECKS_TIMING=1` in its environment and read the `timing:` line from stderr, or read
+`elapsed_s` from the report.
 
 ## Regenerating thresholds
 

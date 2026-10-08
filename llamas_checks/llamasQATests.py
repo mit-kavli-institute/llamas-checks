@@ -37,7 +37,9 @@ Report files:
 from __future__ import annotations
 
 import json
+import os
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -63,9 +65,14 @@ def check_image(
     """Run the QA suite on a single calibration or science FITS/MEF image.
 
     Returns a dict with at least ``status`` ("pass"|"warn"|"fail"),
-    ``message`` and ``report_path`` (the JSON file written, or None).
+    ``message``, ``report_path`` (the JSON file written, or None) and
+    ``elapsed_s`` (wall-clock seconds spent in this call, report write included).
     Raises ``QAEngineError`` on system-level problems.
+
+    Set ``LLAMAS_CHECKS_TIMING=1`` to print a per-stage timing line to stderr.
     """
+    started = time.perf_counter()
+    stages = _StageTimer(started)
     image_path = Path(input_path).expanduser()
     if not image_path.is_file():
         raise QAEngineError(f"input is not a file: {image_path}")
@@ -75,8 +82,10 @@ def check_image(
     config_path = _resolve_config_path(qa_yaml, calib_root, suite, image_path)
     config = load_yaml(config_path)
     _validate_config(config, config_path)
+    stages.mark("config")
 
     structure = _inspect_structure(image_path, config.get("extensions"))
+    stages.mark("structure")
 
     engine = QAEngine(config)
     try:
@@ -84,10 +93,13 @@ def check_image(
     except QAEngineError as exc:
         # Config is valid, so a runtime error means this image/header is unfit
         # for the rules it matched -> a QA failure, not a system error.
+        stages.mark("engine")
         if verbose:
             _print_structure(structure)
         return _result("fail", f"QA could not be completed: {exc}",
-                       suite, image_path, destination, report_all, structure=structure)
+                       suite, image_path, destination, report_all, structure=structure,
+                       stages=stages)
+    stages.mark("engine")
 
     structure["placeholder_extensions"] = sorted(
         {r["extension"] for r in engine_report["results"] if r["status"] == "PLACEHOLDER"})
@@ -97,7 +109,8 @@ def check_image(
     # Header preflight: the image type must be identifiable from the header.
     if not engine_report["active_rule_sets"]:
         return _result("fail", _unidentified_message(engine_report, config),
-                       suite, image_path, destination, report_all, engine_report, structure)
+                       suite, image_path, destination, report_all, engine_report, structure,
+                       stages=stages)
 
     # An unevaluable rule (region out of bounds, no finite pixels, unsupported
     # metric) gives an ERROR verdict: the frame could not be judged, so it is a
@@ -106,7 +119,8 @@ def check_image(
         errors = [r["message"] for r in engine_report["results"] if r["status"] == "ERROR"]
         extra = "" if len(errors) <= 3 else f" (+{len(errors) - 3} more)"
         return _result("fail", "QA could not be completed: " + "; ".join(errors[:3]) + extra,
-                       suite, image_path, destination, report_all, engine_report, structure)
+                       suite, image_path, destination, report_all, engine_report, structure,
+                       stages=stages)
 
     status = _VERDICT_TO_STATUS[engine_report["overall_verdict"]]
     message = _build_message(engine_report)
@@ -114,7 +128,28 @@ def check_image(
         _print_details(engine_report)
 
     return _result(status, message, suite, image_path, destination, report_all,
-                   engine_report, structure)
+                   engine_report, structure, stages=stages)
+
+
+class _StageTimer:
+    """Wall-clock seconds per stage of ``check_image`` (config, structure, engine, report)."""
+
+    def __init__(self, started: float):
+        self.started = started
+        self._last = started
+        self.stages: dict[str, float] = {}
+
+    def mark(self, name: str) -> None:
+        now = time.perf_counter()
+        self.stages[name] = round(now - self._last, 3)
+        self._last = now
+
+    def elapsed(self) -> float:
+        return round(time.perf_counter() - self.started, 3)
+
+    def line(self, image_path: Path, status: str) -> str:
+        parts = " ".join(f"{name}={seconds:.3f}" for name, seconds in self.stages.items())
+        return f"timing: {image_path.name} {status} total={self.elapsed():.3f}s {parts}"
 
 
 def _report_destination(image_path: Path, report: str | None,
@@ -249,6 +284,7 @@ def _result(
     report_all: bool,
     engine_report: dict[str, Any] | None = None,
     structure: dict[str, Any] | None = None,
+    stages: _StageTimer | None = None,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
         "status": status,
@@ -268,10 +304,20 @@ def _result(
     # every frame. The directory is created on write, so a pass leaves no trace.
     if destination is not None and (report_all or status != "pass"):
         result["report_path"] = str(destination)
+        if stages is not None:
+            result["elapsed_s"] = stages.elapsed()
         payload = dict(result)
         if engine_report is not None:
             payload["report"] = engine_report
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+    # Wall-clock time for the whole check, so a slow machine can be diagnosed
+    # from the result itself; the report carries the value as of its write.
+    if stages is not None:
+        stages.mark("report")
+        result["elapsed_s"] = stages.elapsed()
+        if os.environ.get("LLAMAS_CHECKS_TIMING"):
+            print(stages.line(image_path, status), file=sys.stderr)
 
     return result
