@@ -135,7 +135,7 @@ Identical to BIAS with the DARK tables; shutter abs tolerance 0.238 s.
 | `edge_background_level` | median of `bottom_stripe` | band, per det × mode | WARN |
 | `edge_saturated` | median of `bottom_stripe` | ≤ 63000 ADU | FAIL |
 | `row_structure` / `column_structure` | LDLS: banding amplitude of `full_frame` (ADU); ARC: banding amplitude ÷ lamp signal (full-frame mean − `bottom_stripe` median), dimensionless, SKIPPED below 2 ADU of signal | ≤ heavy-tail cap, per det × mode (ARC: one cap for both modes) | FAIL |
-| `vertical_smear` (ARC only) | std of the per-column *median* profile of `full_frame` ÷ lamp signal: vertical halo / smear around the lines, SKIPPED below 20 ADU of signal | ≤ heavy-tail cap, per det (one cap for both modes; ~0.07 red, 0.25–0.55 green/blue) | FAIL |
+| `vertical_smear` (ARC only) | std of the per-column *median* profile of `full_frame`, after a 15-column running median (removes narrow vertical lines, keeps halos), ÷ lamp signal: vertical halo / smear around the lines, SKIPPED below 20 ADU of signal | ≤ robust cap max(median + 8 σ, 1.5 × p95), per det (one cap for both modes; ~0.06–0.10 red, 0.24–0.54 green/blue) | FAIL |
 | `saturation_fraction` | fraction > 63000 ADU | ≤ frac_max, per det × mode | WARN |
 | `ccd_temperature_warm` / `_hot` / `_shutoff` | `CCDTEMP*` per extension | as BIAS | WARN / FAIL / FAIL |
 
@@ -301,15 +301,18 @@ the trimmed profile it measures 0.14 and passes, which is the intended behaviour
 
 **Commissioning ThAr arcs with vertical halos / smear** — two consecutive frames, both FAST with a
 few-tenths-of-a-second SEXPTIME but carrying the signal of a multi-second arc. Saturated lines on
-their own are normal on an arc; what marks these frames is the vertical halo around the lines
-(charge spread along whole columns), which `vertical_smear` measures as the std of the per-column
-median profile over the lamp signal. Normal arcs, faint or bright, sit at ≤ 0.07 on a red camera
-(cap ≈ 0.07–0.10) and ≤ 0.37 on green/blue (caps 0.25–0.55).
+their own are normal on an arc, and so is a line that runs straight down a column (the saturated
+1-column line at x = 800 on 2.B.Red of baseline arc `BASE/Arcs/LLAMAS_2026-05-03_00-08-43.3` and
+the bloomed 3–4-column lines of the stuck-shutter 6.7 s arc `S10/…18-23-49.1`); what marks these
+frames is the vertical halo around the lines (charge spread over tens of columns), which
+`vertical_smear` measures as the std of the per-column median profile, after a 15-column running
+median that removes the narrow lines, over the lamp signal. Normal arcs, faint or bright, sit at
+≤ 0.07 on a red camera (caps 0.06–0.10) and ≤ 0.36 on green/blue (caps 0.24–0.54).
 
 | frame | `vertical_smear` | `row_structure` (÷ signal) | other |
 |---|---|---|---|
-| `COMM/LLAMAS_2026-07-10_20-22-43.7_CAL22_mef.fits` (0.074 s; lines smeared into streaks on every camera) | FAIL on all 8 reds at 1.6–1.8 (16–25 × cap) and on most greens/blues at 0.45–0.69 (1.1–1.9 ×) | FAIL on five reds at 0.40–0.43 (cap 0.23–0.34) | edge-background and red saturation WARNs |
-| `COMM/LLAMAS_2026-07-10_20-22-58.8_CAL22_mef.fits` (0.178 s; thick saturated lines, halos on the reds) | FAIL on all 8 reds at 0.12–1.38 (1.4–17 × cap); greens/blues normal (0.16–0.36) | passes (0.85–0.88 × cap) | edge-background and red saturation WARNs |
+| `COMM/LLAMAS_2026-07-10_20-22-43.7_CAL22_mef.fits` (0.074 s; lines smeared into streaks on every camera) | FAIL on all 8 reds at 1.1–1.4 (13–23 × cap) and on most greens/blues at 0.34–0.65 (0.9–1.5 ×) | FAIL on five reds at 0.40–0.43 (cap 0.23–0.34) | edge-background and red saturation WARNs |
+| `COMM/LLAMAS_2026-07-10_20-22-58.8_CAL22_mef.fits` (0.178 s; thick saturated lines, halos on the reds) | FAIL on all 8 reds at 0.10–0.96 (1.2–17 × cap); greens/blues normal (0.16–0.35) | passes (0.85–0.88 × cap) | edge-background and red saturation WARNs |
 
 Result for both: **FAIL**, exit 2. (Under the pre-2026-10 absolute structure caps both failed 43
 checks on all 22 detectors, mostly because they were far brighter than the 0.07–0.4 s baseline

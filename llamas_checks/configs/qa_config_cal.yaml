@@ -1,4 +1,4 @@
-# LLAMAS calibration QA config -- GENERATED from robust baseline analysis (2026-04-07/05-02/06-30; trimmed-mean structure profiles + MAD rms, WARN/FAIL tiers, 2026-09; ThAr structure normalised by lamp signal + vertical-smear rule, 2026-10). See docs/QA_CHECKS_CATALOGUE.md; regenerate via scripts/gen_configs.py.
+# LLAMAS calibration QA config -- GENERATED from robust baseline analysis (2026-04-07/05-02/06-30; trimmed-mean structure profiles + MAD rms, WARN/FAIL tiers, 2026-09; ThAr structure normalised by lamp signal + vertical-smear rule (15-column running median), 2026-10). See docs/QA_CHECKS_CATALOGUE.md; regenerate via scripts/gen_configs.py.
 config_version: '1.0'
 instrument:
   name: LLAMAS
@@ -166,6 +166,7 @@ metrics:
     type: vertical_smear
     background_region: bottom_stripe
     min_signal: 20.0
+    smooth_columns: 15
   background_gradient_rate:
     type: background_gradient_rate
     exptime_keys:
@@ -2814,124 +2815,124 @@ lookup_tables:
   smear_ARC_THAR:
     1.A.Red:
       FAST:
-        max: 0.0608
+        max: 0.0581
       SLOW:
-        max: 0.0608
+        max: 0.0581
     1.A.Green:
       FAST:
-        max: 0.247
+        max: 0.239
       SLOW:
-        max: 0.247
+        max: 0.239
     1.A.Blue:
       FAST:
-        max: 0.5108
+        max: 0.5008
       SLOW:
-        max: 0.5108
+        max: 0.5008
     1.B.Red:
       FAST:
-        max: 0.0626
+        max: 0.0587
       SLOW:
-        max: 0.0626
+        max: 0.0587
     1.B.Green:
       FAST:
-        max: 0.4425
+        max: 0.4264
       SLOW:
-        max: 0.4425
+        max: 0.4264
     1.B.Blue:
       FAST:
-        max: 0.5314
+        max: 0.5156
       SLOW:
-        max: 0.5314
+        max: 0.5156
     2.A.Red:
       FAST:
-        max: 0.0623
+        max: 0.0595
       SLOW:
-        max: 0.0623
+        max: 0.0595
     2.A.Green:
       FAST:
-        max: 0.3503
+        max: 0.3347
       SLOW:
-        max: 0.3503
+        max: 0.3347
     2.A.Blue:
       FAST:
-        max: 0.5108
+        max: 0.5008
       SLOW:
-        max: 0.5108
+        max: 0.5008
     2.B.Red:
       FAST:
-        max: 0.062
+        max: 0.0558
       SLOW:
-        max: 0.062
+        max: 0.0558
     2.B.Green:
       FAST:
-        max: 0.3877
+        max: 0.6163
       SLOW:
-        max: 0.3877
+        max: 0.6163
     2.B.Blue:
       FAST:
-        max: 0.3723
+        max: 0.3647
       SLOW:
-        max: 0.3723
+        max: 0.3647
     3.A.Red:
       FAST:
-        max: 0.0742
+        max: 0.0714
       SLOW:
-        max: 0.0742
+        max: 0.0714
     3.A.Green:
       FAST:
-        max: 0.2627
+        max: 0.2522
       SLOW:
-        max: 0.2627
+        max: 0.2522
     3.A.Blue:
       FAST:
-        max: 0.4237
+        max: 0.4147
       SLOW:
-        max: 0.4237
+        max: 0.4147
     3.B.Red:
       FAST:
-        max: 0.0639
+        max: 0.0618
       SLOW:
-        max: 0.0639
+        max: 0.0618
     3.B.Green:
       FAST:
-        max: 0.3595
+        max: 0.3467
       SLOW:
-        max: 0.3595
+        max: 0.3467
     3.B.Blue:
       FAST:
-        max: 0.5481
+        max: 0.5363
       SLOW:
-        max: 0.5481
+        max: 0.5363
     4.A.Red:
       FAST:
-        max: 0.095
+        max: 0.0961
       SLOW:
-        max: 0.095
+        max: 0.0961
     4.A.Green:
       FAST:
-        max: 0.2957
+        max: 0.2855
       SLOW:
-        max: 0.2957
+        max: 0.2855
     4.A.Blue:
       FAST:
-        max: 0.5108
+        max: 0.5008
       SLOW:
-        max: 0.5108
+        max: 0.5008
     4.B.Red:
       FAST:
-        max: 0.0638
+        max: 0.0615
       SLOW:
-        max: 0.0638
+        max: 0.0615
     4.B.Green:
       FAST:
-        max: 0.2745
+        max: 0.2673
       SLOW:
-        max: 0.2745
+        max: 0.2673
     4.B.Blue:
       FAST:
-        max: 0.4899
+        max: 0.4804
       SLOW:
-        max: 0.4899
+        max: 0.4804
 rule_sets:
   BIAS:
     applies_when:

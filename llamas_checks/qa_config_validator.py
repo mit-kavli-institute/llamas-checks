@@ -272,6 +272,14 @@ class QAConfigValidator:
                 if "min_signal" in metric and not (self.is_number(metric.get("min_signal"))
                                                    and float(metric["min_signal"]) >= 0):
                     self.add_error(f"{path}.min_signal", "must be a non-negative number")
+            if mtype == "vertical_smear":
+                # optional: width (columns) of the running median that removes narrow
+                # vertical lines from the column-median profile before the std
+                allowed.add("smooth_columns")
+                sc = metric.get("smooth_columns")
+                if sc is not None and not (isinstance(sc, int) and not isinstance(sc, bool)
+                                           and sc >= 1):
+                    self.add_error(f"{path}.smooth_columns", "must be a positive integer")
             for field, value in metric.items():
                 if field not in allowed:
                     self.add_error(f"{path}.{field}", "unknown field for this metric type")

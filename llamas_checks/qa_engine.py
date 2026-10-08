@@ -87,8 +87,14 @@ DEFAULT_MIN_SIGNAL = 2.0   # ADU; below this the ratio is noise and the rule SKI
 # The median profile is read off the same sorted array as the column structure
 # metric, so the rule costs no extra pixel pass. Below ~20 ADU of signal the
 # green/blue column medians are read-noise dominated, hence the higher default.
+# A saturated line that happens to run vertically also lifts the median of its
+# one to four columns, and that is normal on an arc; the column-median profile is
+# therefore smoothed with a running median of DEFAULT_SMEAR_SMOOTH columns before
+# the std, which removes anything narrower than ~half that width (lines, bloomed
+# lines, a single hot column) and keeps halos (tens of columns wide).
 SMEAR_TYPES = ("vertical_smear",)
 DEFAULT_MIN_SIGNAL_SMEAR = 20.0
+DEFAULT_SMEAR_SMOOTH = 15   # columns; 1 disables the smoothing
 # Metric types that need the sorted-line profiles of the region (shared per HDU).
 _PROFILE_TYPES = ("row_structure", "column_structure") + STRUCTURE_NORM_TYPES + SMEAR_TYPES
 
@@ -1033,11 +1039,17 @@ class QAEngine:
             # and a faint 0.07 s arc give the same number for the same pattern.
             # vertical_smear is the std of the per-column MEDIANS over the signal:
             # curved arc lines leave the column medians at the background, a
-            # vertical halo lifts them (see SMEAR_TYPES).
+            # vertical halo lifts them (see SMEAR_TYPES). The median profile is
+            # smoothed with a running median first so a vertical line, which is
+            # only a few columns wide, drops out while a halo survives.
             if profiles is None:
                 profiles = line_profiles(values, _profile_axis(metric_type))
             trimmed, median = profiles
-            profile = median if metric_type in SMEAR_TYPES else trimmed
+            if metric_type in SMEAR_TYPES:
+                profile = running_median(median, int(metric.get("smooth_columns",
+                                                                 DEFAULT_SMEAR_SMOOTH)))
+            else:
+                profile = trimmed
             profile = profile[np.isfinite(profile)]
             if profile.size == 0:
                 raise QAEngineError("structure metric has no finite rows/columns")
@@ -1240,6 +1252,27 @@ def trimmed_mean_profile(values: Any, axis: int, trim: float = STRUCTURE_TRIM_FR
     """Mean along ``axis`` after dropping the lowest/highest ``trim`` fraction of each line
     (the first element of ``line_profiles``)."""
     return line_profiles(values, axis, trim)[0]
+
+
+def running_median(profile: Any, width: int) -> Any:
+    """Running median of a 1-D profile over ``width`` samples (edge-padded, so the
+    output has the input's length). ``width`` is made odd and clipped to the
+    profile length; ``width <= 1`` returns the profile unchanged (as float64).
+    Used by the vertical-smear metric to drop features narrower than ~width/2."""
+    values = np.asarray(profile, dtype=np.float64).ravel()
+    n = values.size
+    width = int(width)
+    if width <= 1 or n <= 1:
+        return values
+    width = min(width, n if n % 2 else n - 1)
+    if width % 2 == 0:
+        width -= 1
+    if width <= 1:
+        return values
+    half = width // 2
+    padded = np.pad(values, half, mode="edge")
+    windows = np.lib.stride_tricks.sliding_window_view(padded, width)
+    return np.median(windows, axis=-1)
 
 
 def load_yaml(path: Path) -> dict[str, Any]:

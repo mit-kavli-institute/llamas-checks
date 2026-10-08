@@ -310,6 +310,7 @@ def test_shipped_arc_vertical_smear_rule(cal_cfg):
     metric = cal_cfg["metrics"]["vertical_smear"]
     assert metric["type"] == "vertical_smear"
     assert metric["background_region"] == "bottom_stripe" and metric["min_signal"] == 20.0
+    assert metric["smooth_columns"] == 15     # narrow vertical lines are not smear
     table = cal_cfg["lookup_tables"]["smear_ARC_THAR"]
     assert len(table) == 24
     for detector, modes in table.items():

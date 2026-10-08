@@ -56,9 +56,10 @@ def cal_type_section(name, prodcatg, has_level, detectors, tables, derived, norm
                 "(structure ÷ (full-frame mean − bottom-stripe median), dimensionless) so the cap "
                 "does not depend on the exposure time; the sample is pooled over both readout modes, "
                 "so the FAST and SLOW caps are identical. Rules SKIP when the signal is below 2 ADU. "
-                "**Vertical smear** is the std of the per-column median profile ÷ the same signal "
-                "(a vertical halo around the lines lifts whole-column medians; curved lines do not), "
-                "FAIL above the cap, SKIPPED below 20 ADU of signal.", ""]
+                "**Vertical smear** is the std of the per-column median profile, after a 15-column "
+                "running median that removes narrow vertical lines, ÷ the same signal (a vertical halo "
+                "around the lines lifts whole-column medians over tens of columns; curved or narrow "
+                "vertical lines do not), FAIL above the cap, SKIPPED below 20 ADU of signal.", ""]
     edge, struct, sat = tables[f"edge_bg_{name}"], tables[f"struct_{name}"], tables[f"sat_{name}"]
     smear = tables.get(f"smear_{name}") if normalised else None
     level = tables.get(f"level_{name}") if has_level else None

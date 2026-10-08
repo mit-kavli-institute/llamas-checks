@@ -176,19 +176,22 @@ structure rules (0.85× cap). The rule SKIPs on a detector with < 2 ADU of signa
 **Vertical smear (`vertical_smear`, ARC_THAR, FAIL).** Saturated lines are normal on an arc; the
 fault on the 2026-07-10 frames is the vertical halo around the lines. A curved narrow line occupies
 a small fraction of each column, so the per-column *median* stays at the background, while a halo
-fills whole columns and lifts it: the metric is std(per-column median) ÷ lamp signal, taken from the
-same sorted array as the column structure (no extra pixel pass). Over 47 normal arcs (35 baseline,
-8 commissioning, 4 of 2026-10-07; records ≥ 20 ADU) a red camera measures 0.022–0.07 (median 0.03)
-at any exposure, green 0.11–0.30, blue 0.23–0.37; the 2026-07-10 arcs measure 1.6–1.8 (43.7, every
-red) and 0.12–1.38 (58.8, every red), so both FAIL. Caps are max(median + 8 σ, 1.5 × p95) per
-detector, pooled over readout mode — robust rather than "1.5 × the worst frame", because one
-baseline arc (`Arcs/LLAMAS_2026-05-03_00-08-43.3`) has a saturated full-height column at x = 800 on
-2.B.Red (smear 0.57 against 0.04 on its siblings) and must not open that camera's cap; it is the one
-breach `aggregate_thresholds.py` reports, and exactly the kind of vertical feature the rule exists
-for. Below 20 ADU of signal the green/blue column medians are read-noise dominated (normal values
-drift up to 0.53), so the rule SKIPs there; the reds always have > 100 ADU. Also caught: the
-stuck-shutter 6.7 s arc `cals_test_run/2026-10-07_18-23-49.1` (bloomed reds, 0.56–0.84), on top of
-its shutter FAIL.
+fills whole columns and lifts it. A line that happens to run straight down a column also lifts
+that column's median, and that is normal (baseline arc `Arcs/LLAMAS_2026-05-03_00-08-43.3` has a
+saturated 1-column line at x = 800 on 2.B.Red; the stuck-shutter 6.7 s arc
+`cals_test_run/2026-10-07_18-23-49.1` has bloomed 3–4-column lines on its reds), so the column-median
+profile is first smoothed with a **15-column running median**, which removes anything narrower than
+~8 columns and keeps the halos (27–150 columns wide on the 2026-07-10 frames). The metric is
+std(running median of the per-column medians) ÷ lamp signal, from the same sorted array as the
+column structure (no extra pixel pass). Over 52 normal red-camera records (35 baseline, 9
+commissioning and 5 test-run arcs; ≥ 20 ADU) a red camera measures 0.024–0.067 (median 0.03) at any
+exposure, green 0.11–0.29, blue 0.23–0.36; the narrow-line cases measure 0.038–0.054 (normal); the
+2026-07-10 arcs measure 1.1–1.4 (43.7, every red, plus 0.34–0.65 on most greens/blues) and 0.10–0.96
+(58.8, every red), so both FAIL at 1.2–23 × cap. Caps are max(median + 8 σ, 1.5 × p95) per detector,
+pooled over readout mode, so a single odd baseline record cannot open a camera's cap;
+`aggregate_thresholds.py` reports any baseline record above its cap (currently none). Below 20 ADU
+of signal the green/blue column medians are read-noise dominated (normal values drift up to 0.53),
+so the rule SKIPs there; the reds always have > 100 ADU.
 
 ### SCIENCE (`SCI.R-*`)
 | Rule | Source | Threshold | Sev |

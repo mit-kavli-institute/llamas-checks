@@ -48,13 +48,17 @@ FLOOR_SAT = 0.0005   # min saturation-fraction cap
 MIN_SIGNAL_NORM = 2.0                 # ADU; fainter records are excluded (noise / noise)
 POOL_MODES_FOR_NORM = ("CAL.R-ARC",)  # types whose normalised caps pool FAST+SLOW
 
-# Vertical smear / halo on arcs: std of the per-column MEDIAN profile over the lamp
-# signal (col_med_std / (full_mean - edge_med)). Curved arc lines leave the column
-# medians at the background (~0.03 on a red camera at any exposure); a vertical
-# halo fills whole columns and lifts them (>1 on the 2026-07-10 odd arcs). Below
-# ~20 ADU the green/blue column medians are read-noise dominated, so fainter
-# records are excluded and the engine SKIPs the rule there (min_signal: 20).
+# Vertical smear / halo on arcs: std of the per-column MEDIAN profile, smoothed
+# with the engine's running median over SMEAR_SMOOTH_COLUMNS columns, over the lamp
+# signal (col_med_smooth_std / (full_mean - edge_med)). Curved arc lines leave the
+# column medians at the background (~0.03 on a red camera at any exposure) and a
+# saturated line that runs vertically is removed by the smoothing (it is only a
+# few columns wide); a vertical halo is tens of columns wide, survives it and
+# lifts the std (>1 on the 2026-07-10 odd arcs). Below ~20 ADU the green/blue
+# column medians are read-noise dominated, so fainter records are excluded and
+# the engine SKIPs the rule there (min_signal: 20).
 MIN_SIGNAL_SMEAR = 20.0
+SMEAR_SMOOTH_COLUMNS = 15   # must match qa_engine.DEFAULT_SMEAR_SMOOTH / the config metric
 
 # Per-detector CCD temperature: each camera is monitored against its OWN healthy
 # baseline and WARN/FAIL on warming above it. Colour-aware margins -- the red
@@ -135,12 +139,12 @@ def normalised_structure(rs):
 
 
 def vertical_smear(rs):
-    """Cap for col_med_std / signal over the records ``rs`` that carry col_med_std
+    """Cap for col_med_smooth_std / signal over the records ``rs`` that carry it
     (signal = full_mean - edge_med; records fainter than MIN_SIGNAL_SMEAR dropped).
     None when no record has the statistic (frame types it was never extracted for)."""
     vals = []
     for r in rs:
-        smear = r.get("col_med_std")
+        smear = r.get("col_med_smooth_std")
         sig = r.get("full_mean")
         edge = r.get("edge_med")
         if smear is None or sig is None or edge is None:
@@ -152,7 +156,7 @@ def vertical_smear(rs):
     if not vals:
         return None
     return {"max": robust_smear_cap(vals), "n": len(vals), "min_signal": MIN_SIGNAL_SMEAR,
-            "observed": obs_stats(np.asarray(vals))}
+            "smooth_columns": SMEAR_SMOOTH_COLUMNS, "observed": obs_stats(np.asarray(vals))}
 
 
 def robust_smear_cap(vals):
@@ -160,9 +164,10 @@ def robust_smear_cap(vals):
 
     Unlike heavy_tail_cap this does not key on the single worst frame: the normal
     smear distribution is tight (a red camera sits at 0.02-0.05 at any exposure),
-    so one baseline frame that itself carries a halo on one camera (2.B.Red of
-    2026-05-03 00-08-43.3, 0.57 against 0.04 on its siblings) must not open that
-    camera's cap by 15x. Such a record shows up in the self-check below instead."""
+    so a single odd baseline record must not open a camera's cap many-fold (before
+    the running-median smoothing, the vertical saturated line on 2.B.Red of
+    2026-05-03 00-08-43.3 did exactly that). Such records show up in the
+    self-check below instead."""
     a = np.asarray(vals, float)
     return round(max(float(np.median(a)) + N_CAP * robust_sigma(a),
                      1.5 * float(np.percentile(a, 95))), 4)
@@ -320,9 +325,10 @@ def main():
                     "structure_norm": f"structure / (full_mean - edge_med), heavy-tail cap, records with "
                                       f"signal < {MIN_SIGNAL_NORM} ADU excluded; FAST+SLOW pooled for "
                                       f"{', '.join(POOL_MODES_FOR_NORM)}",
-                    "smear": f"col_med_std / (full_mean - edge_med) (std of the per-column median "
-                             f"profile over the lamp signal), heavy-tail cap, records with signal < "
-                             f"{MIN_SIGNAL_SMEAR} ADU or without col_med_std excluded; FAST+SLOW pooled "
+                    "smear": f"col_med_smooth_std / (full_mean - edge_med) (std of the per-column median "
+                             f"profile after a {SMEAR_SMOOTH_COLUMNS}-column running median, over the lamp "
+                             f"signal), cap max(med+{N_CAP}sig, 1.5 x p95), records with signal < "
+                             f"{MIN_SIGNAL_SMEAR} ADU or without the statistic excluded; FAST+SLOW pooled "
                              f"for {', '.join(POOL_MODES_FOR_NORM)}"},
            "per_detector": derived, "shutter": shutter, "ccd_temp": ccd}
     json.dump(out, open(OUT_JSON, "w"), indent=1)
@@ -355,15 +361,15 @@ def main():
     for r in normal:
         ent = derived.get(r["prodcatg"], {}).get(r["mode"], {}).get(det_name(r))
         sm = ent and ent.get("smear")
-        if not sm or r.get("col_med_std") is None:
+        if not sm or r.get("col_med_smooth_std") is None:
             continue
         sig = r["full_mean"] - r["edge_med"]
         if sig < MIN_SIGNAL_SMEAR:
             continue
-        if r["col_med_std"] / sig > sm["max"]:
-            smear_breaches.append((r["filename"], det_name(r), round(r["col_med_std"] / sig, 3), sm["max"]))
+        if r["col_med_smooth_std"] / sig > sm["max"]:
+            smear_breaches.append((r["filename"], det_name(r), round(r["col_med_smooth_std"] / sig, 3), sm["max"]))
     print(f"  vertical-smear breaches among the arc records: {len(smear_breaches)} "
-          f"(a baseline frame with a halo on that camera; the cap is robust to it)")
+          f"(should be 0; a breach is a baseline frame with a halo on that camera)")
     for b in smear_breaches:
         print("    ", b)
 

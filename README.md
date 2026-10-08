@@ -156,12 +156,15 @@ on a bias means the frame is not usable as a bias, not that one detector is nois
   2 ADU of signal.
 - Saturated lines are normal on an arc (the reds saturate at 1 s). What is *not* normal is a
   **vertical halo or smear** around the lines, so arcs also get a `vertical_smear` check: the
-  standard deviation of the per-column *median* profile divided by the lamp signal. A narrow curved
-  line occupies a small fraction of each column and leaves the column medians at the background;
-  a halo fills whole columns and lifts them. Normal arcs measure ~0.03 on a red camera at any
-  exposure, the 2026-07-10 commissioning arcs over 1. The median comes from the same sorted array
-  as the column structure, so the check costs nothing extra; it SKIPs below 20 ADU of signal
-  (green/blue cameras on the shortest ~0.07 s arcs).
+  standard deviation of the per-column *median* profile, smoothed with a 15-column running
+  median, divided by the lamp signal. A narrow curved line occupies a small fraction of each
+  column and leaves the column medians at the background; a line that happens to run straight
+  down a column (saturated or not, one to a few columns wide) does lift that column's median but
+  is removed by the running median; a halo is tens of columns wide, survives it and lifts the
+  profile. Normal arcs measure ~0.03 on a red camera at any exposure, the 2026-07-10
+  commissioning arcs 0.1–1.4. The median comes from the same sorted array as the column
+  structure, so the check costs nothing extra; it SKIPs below 20 ADU of signal (green/blue
+  cameras on the shortest ~0.07 s arcs).
 - The structure limits are set separately for each detector and are deliberately generous:
   naturally structured detectors (4.A.Red's left-edge glow, 3.A.Blue's fixed banding) and red
   ThAr arcs that normally saturate pass comfortably. On LDLS flats the red detectors are commonly

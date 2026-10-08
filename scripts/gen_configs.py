@@ -117,6 +117,7 @@ MIN_SIGNAL_NORM = 2.0   # ADU above the edge stripe; fainter -> rule SKIPs
 # signal): the fault the 2026-07-10 commissioning arcs show. Same sets as above.
 smear_leaf = lambda e: {"max": e["smear"]["max"]}
 MIN_SIGNAL_SMEAR = 20.0  # ADU; green/blue column medians are noise below this
+SMEAR_SMOOTH_COLUMNS = 15  # running median that removes narrow vertical lines (aggregate_thresholds)
 sat_leaf = lambda e: {"frac_max": e["sat_frac_max"]}
 
 KEYS = [{"from": "extension.name"}, {"from": "metadata.readout_mode"}]
@@ -147,9 +148,11 @@ def base_blocks():
                                  "background_region": "bottom_stripe", "min_signal": MIN_SIGNAL_NORM},
             "column_banding_norm": {"type": "column_structure_norm",
                                     "background_region": "bottom_stripe", "min_signal": MIN_SIGNAL_NORM},
-            # lamp frames: std of the per-column medians / lamp signal (vertical halo)
+            # lamp frames: std of the per-column medians (narrow lines removed by a
+            # running median) / lamp signal (vertical halo)
             "vertical_smear": {"type": "vertical_smear",
-                               "background_region": "bottom_stripe", "min_signal": MIN_SIGNAL_SMEAR},
+                               "background_region": "bottom_stripe", "min_signal": MIN_SIGNAL_SMEAR,
+                               "smooth_columns": SMEAR_SMOOTH_COLUMNS},
             # camera-warming: quarter-block median gradient / exposure time (ADU/s)
             "background_gradient_rate": {"type": "background_gradient_rate",
                                          "exptime_keys": ["SEXPTIME", "REXPTIME", "EXPTIME"],
@@ -414,7 +417,7 @@ def main():
 
     hdr = ("# LLAMAS %s QA config -- GENERATED from robust baseline analysis "
            "(2026-04-07/05-02/06-30; trimmed-mean structure profiles + MAD rms, WARN/FAIL tiers, 2026-09; "
-           "ThAr structure normalised by lamp signal + vertical-smear rule, 2026-10). "
+           "ThAr structure normalised by lamp signal + vertical-smear rule (15-column running median), 2026-10). "
            "See docs/QA_CHECKS_CATALOGUE.md; regenerate via scripts/gen_configs.py.\n")
     dump(build_cal_config(), os.path.join(args.out_dir, "qa_config_cal.yaml"), hdr % "calibration")
     dump(build_science_config(), os.path.join(args.out_dir, "qa_config_science.yaml"), hdr % "science")

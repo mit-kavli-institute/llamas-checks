@@ -9,9 +9,11 @@ Region convention (2048x2048; illuminated fibre stack ~y[32:2004]):
 These stripes are the per-detector bias/background reference on ANY frame type.
 Structure metrics follow the engine definition (std of the per-row/column
 2 %-trimmed-mean profile, qa_engine.line_profiles); row_med_std / col_med_std are
-the std of the per-row / per-column MEDIAN profiles from the same sort (the
-vertical-smear metric on arcs is col_med_std / (full_mean - edge_med)); full_std is
-the robust 1.4826*MAD sigma (full_std_plain = np.std).
+the std of the per-row / per-column MEDIAN profiles from the same sort, and
+col_med_smooth_std the same after the engine's running median over
+DEFAULT_SMEAR_SMOOTH columns (the vertical-smear metric on arcs is
+col_med_smooth_std / (full_mean - edge_med)); full_std is the robust 1.4826*MAD
+sigma (full_std_plain = np.std).
 Placeholder/missing extensions (constant-valued frames) are recorded with
 placeholder=True and no statistics.
 
@@ -32,7 +34,7 @@ import sys
 import numpy as np
 from astropy.io import fits
 
-from llamas_checks.qa_engine import line_profiles
+from llamas_checks.qa_engine import DEFAULT_SMEAR_SMOOTH, line_profiles, running_median
 
 SAT = 63000.0
 BOT = (slice(2, 28), slice(100, 1948))       # (y, x)
@@ -99,6 +101,11 @@ def extract_file(path):
                     col_struct=float(np.nanstd(colprof[np.isfinite(colprof)])),
                     row_med_std=float(np.nanstd(rowmed[np.isfinite(rowmed)])),
                     col_med_std=float(np.nanstd(colmed[np.isfinite(colmed)])),
+                    # smear statistic as the engine computes it: narrow vertical lines
+                    # removed by a running median before the std
+                    col_med_smooth_std=float(np.nanstd(
+                        running_median(np.nan_to_num(colmed, nan=np.nanmedian(colmed)),
+                                       DEFAULT_SMEAR_SMOOTH))),
                 )
                 recs.append(rec)
     except Exception as exc:

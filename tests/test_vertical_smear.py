@@ -3,8 +3,11 @@
 A curved, narrow arc line occupies a small fraction of every detector column, so
 the per-column median stays at the background; a vertical halo fills whole columns
 around the bright lines and lifts the median of just those columns. The metric is
-std(per-column median) / lamp signal, read off the same sorted array as the column
-structure metric. Frames are small synthetic MEFs.
+std(running_median(per-column median, 15 columns)) / lamp signal, read off the
+same sorted array as the column structure metric. The running median removes a
+line that happens to run vertically (one to a few columns wide, saturated or not),
+which is normal on an arc; a halo is tens of columns wide and survives it.
+Frames are small synthetic MEFs.
 """
 import copy
 import json
@@ -17,10 +20,10 @@ from astropy.io import fits
 from llamas_checks import qa_engine as E
 from llamas_checks.llamasQATests import check_image
 from llamas_checks.qa_config_validator import QAConfigValidator
-from llamas_checks.qa_engine import QAEngine, line_profiles, trimmed_mean_profile
+from llamas_checks.qa_engine import QAEngine, line_profiles, running_median, trimmed_mean_profile
 
-SHAPE = (64, 64)
-BOTTOM = {"type": "rectangle", "x_start": 2, "x_end": 62, "y_start": 1, "y_end": 5}
+SHAPE = (64, 120)   # rows x columns
+BOTTOM = {"type": "rectangle", "x_start": 2, "x_end": 118, "y_start": 1, "y_end": 5}
 
 CONFIG = {
     "config_version": "1.0",
@@ -33,8 +36,8 @@ CONFIG = {
         "column_banding": {"type": "column_structure"},
         "column_banding_norm": {"type": "column_structure_norm",
                                 "background_region": "bottom_stripe", "min_signal": 2.0},
-        "vertical_smear": {"type": "vertical_smear",
-                           "background_region": "bottom_stripe", "min_signal": 20.0},
+        "vertical_smear": {"type": "vertical_smear", "background_region": "bottom_stripe",
+                           "min_signal": 20.0, "smooth_columns": 15},
     },
     "lookup_tables": {"noop": {"a": 1}},
     "rule_sets": {
@@ -53,28 +56,37 @@ CONFIG = {
     "verdict_policy": {"fail_if_any_fail": True, "warn_if_any_warn": True},
 }
 
+LINE_SPACING = 24
+LINE_X0 = 10
 
-def arc_frame(amplitude, halo=0.0, pedestal=700.0, seed=0):
-    """Pedestal + curved narrow 'emission lines' (each line drifts 10 columns over the
+
+def arc_frame(amplitude, halo=0.0, halo_half_width=10, vertical_line=None,
+              pedestal=700.0, seed=0):
+    """Pedestal + curved narrow 'emission lines' (each drifts 10 columns over the
     frame height, so every column holds a line for only a few rows) + checkerboard
     noise. ``halo`` adds a smooth full-height vertical band of ``halo * amplitude``
-    around each line: the vertical smear signature."""
+    over +/- ``halo_half_width`` columns around each line: the smear signature.
+    ``vertical_line=(x, width, level)`` adds a perfectly vertical full-height line of
+    ``width`` columns at ``level`` ADU (a saturated line that runs vertically)."""
     rng = np.random.default_rng(seed)
     frame = np.full(SHAPE, pedestal, dtype=np.float64)
     ny, nx = SHAPE
     rows = np.arange(ny)
-    for x0 in range(8, nx - 8, 12):
+    for x0 in range(LINE_X0, nx - 10, LINE_SPACING):
         xs = (x0 + 10 * (rows - 6) / (ny - 6)).round().astype(int)
         for y, x in zip(rows, xs):
             if y >= 6 and 0 <= x < nx:
                 frame[y, x] += amplitude
         if halo:
-            for dx in range(-3, 4):
-                if 0 <= x0 + dx < nx:
-                    frame[6:, x0 + dx] += halo * amplitude * (1 - abs(dx) / 4)
+            for dx in range(-halo_half_width, halo_half_width + 1):
+                if 0 <= x0 + 5 + dx < nx:
+                    frame[6:, x0 + 5 + dx] += halo * amplitude * (1 - abs(dx) / (halo_half_width + 1))
+    if vertical_line is not None:
+        x, width, level = vertical_line
+        frame[6:, x:x + width] = level
     frame += np.where(np.indices(SHAPE).sum(axis=0) % 2, 0.5, -0.5)
     frame += rng.normal(0.0, 0.3, SHAPE)
-    return frame
+    return np.clip(frame, 0, 65535)
 
 
 def write_mef(tmp_path, name, frames, dtype=np.uint16):
@@ -94,12 +106,19 @@ def by_rule(report, ext):
     return {r["rule"]: r for r in report["results"] if r["extension"] == ext}
 
 
-def expected_smear(data):
-    signal = float(np.mean(data)) - float(np.median(data[1:5, 2:62]))
-    return float(np.std(np.median(np.asarray(data, float), axis=0))) / signal
+def expected_smear(data, smooth=15):
+    signal = float(np.mean(data)) - float(np.median(data[1:5, 2:118]))
+    colmed = np.median(np.asarray(data, float), axis=0)
+    return float(np.std(running_median(colmed, smooth))) / signal
 
 
-# ---------------------------------------------------------------- line_profiles / wrapper
+def one_camera_config():
+    cfg = copy.deepcopy(CONFIG)
+    cfg["extensions"] = cfg["extensions"][:1]
+    return cfg
+
+
+# ---------------------------------------------------------------- helpers
 @pytest.mark.parametrize("dtype", [np.uint16, np.int16, np.float32])
 @pytest.mark.parametrize("axis", [-1, -2])
 def test_line_profiles_match_numpy(dtype, axis):
@@ -120,10 +139,42 @@ def test_line_profiles_float_with_nans():
     data[3, :] = np.nan              # a whole row of NaN
     data[:, 4] = np.nan              # a whole column of NaN
     data[7, 9] = np.nan
-    trimmed, median = line_profiles(data, -1)
+    with np.errstate(all="ignore"):
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            trimmed, median = line_profiles(data, -1)
+            assert np.array_equal(trimmed_mean_profile(data, -1), trimmed, equal_nan=True)
     assert np.isnan(trimmed[3]) and np.isnan(median[3])
     assert np.allclose(trimmed[[0, 1, 2]], 5.0) and np.allclose(median[[0, 1, 2]], 5.0)
-    assert np.array_equal(trimmed_mean_profile(data, -1), trimmed, equal_nan=True)
+
+
+@pytest.mark.parametrize("width", [1, 2, 3, 5, 15, 16, 101])
+def test_running_median_matches_a_loop(width):
+    rng = np.random.default_rng(3)
+    profile = rng.normal(0, 1, 60)
+    profile[20] = 50.0                      # a 1-sample spike
+    got = running_median(profile, width)
+    assert got.shape == profile.shape
+    w = min(width, 59) if width > 1 else 1
+    w = w if w % 2 else w - 1
+    if w <= 1:
+        assert np.array_equal(got, profile)
+        return
+    half = w // 2
+    padded = np.pad(profile, half, mode="edge")
+    want = np.array([np.median(padded[i:i + w]) for i in range(profile.size)])
+    assert np.allclose(got, want)
+    assert got[20] < 5.0                    # the spike is gone for any width >= 3
+
+
+def test_running_median_removes_narrow_keeps_broad():
+    profile = np.zeros(200)
+    profile[50:53] = 100.0                  # 3 columns wide: a vertical line
+    profile[120:150] = 20.0                 # 30 columns wide: a halo
+    smoothed = running_median(profile, 15)
+    assert smoothed[49:54].max() == 0.0
+    assert np.allclose(smoothed[125:145], 20.0)
 
 
 # ---------------------------------------------------------------- the metric
@@ -142,10 +193,9 @@ def test_smear_matches_independent_computation(tmp_path, dtype):
 
 
 def test_curved_lines_pass_and_halo_fails_at_any_brightness(tmp_path):
-    cfg = copy.deepcopy(CONFIG)
-    cfg["extensions"] = cfg["extensions"][:1]
+    cfg = one_camera_config()
     clean_values = []
-    for amp in (400.0, 2000.0, 8000.0):
+    for amp in (1000.0, 4000.0, 16000.0):     # ~40, 150, 600 ADU of signal
         clean = QAEngine(cfg, cameras_down=[]).run(write_mef(tmp_path, f"ok{int(amp)}.fits", [arc_frame(amp)]))
         halo = QAEngine(cfg, cameras_down=[]).run(write_mef(tmp_path, f"halo{int(amp)}.fits",
                                                             [arc_frame(amp, halo=0.15)]))
@@ -159,9 +209,38 @@ def test_curved_lines_pass_and_halo_fails_at_any_brightness(tmp_path):
     assert max(clean_values) < 1.5 * min(clean_values) + 0.01
 
 
+@pytest.mark.parametrize("width", [1, 3])
+def test_vertical_saturated_line_is_not_smear(tmp_path, width):
+    """A line that runs straight down one (or three) columns at the ADC ceiling is a
+    normal arc line (2.B.Red of baseline 2026-05-03 00-08-43.3): the running median
+    removes it, so the rule passes. Without smoothing the same frame fails."""
+    cfg = one_camera_config()
+    frame = arc_frame(2000.0, vertical_line=(70, width, 65535.0))
+    path = write_mef(tmp_path, f"vline{width}.fits", [frame])
+    report = QAEngine(cfg, cameras_down=[]).run(path)
+    smear = by_rule(report, "1.A.Red")["vertical_smear"]
+    assert smear["passed"] is True, smear
+    assert report["overall_verdict"] == "PASS"
+    raw = copy.deepcopy(cfg)
+    raw["metrics"]["vertical_smear"]["smooth_columns"] = 1
+    raw_value = by_rule(QAEngine(raw, cameras_down=[]).run(path), "1.A.Red")["vertical_smear"]
+    assert raw_value["passed"] is False
+    assert raw_value["measured_value"] > 5 * smear["measured_value"]
+
+
+def test_smooth_columns_one_is_the_raw_metric(tmp_path):
+    cfg = one_camera_config()
+    cfg["metrics"]["vertical_smear"]["smooth_columns"] = 1
+    frame = arc_frame(2000.0, halo=0.2)
+    path = write_mef(tmp_path, "arc.fits", [frame])
+    stored = fits.getdata(path, 1)
+    value = by_rule(QAEngine(cfg, cameras_down=[]).run(path), "1.A.Red")["vertical_smear"]["measured_value"]
+    assert value == pytest.approx(expected_smear(stored, smooth=1), rel=1e-5)
+
+
 def test_faint_frame_skips_the_smear_rule(tmp_path):
     # signal ~6 ADU: below min_signal 20 -> SKIPPED; the structure_norm rule (min 2) still runs
-    path = write_mef(tmp_path, "faint.fits", [arc_frame(60.0), arc_frame(2000.0)])
+    path = write_mef(tmp_path, "faint.fits", [arc_frame(150.0), arc_frame(2000.0)])
     report = QAEngine(CONFIG, cameras_down=[]).run(path)
     faint = by_rule(report, "1.A.Red")
     assert faint["vertical_smear"]["status"] == "SKIPPED"
@@ -169,16 +248,20 @@ def test_faint_frame_skips_the_smear_rule(tmp_path):
     assert faint["column_structure"]["status"] == "EVALUATED"
     assert by_rule(report, "1.B.Red")["vertical_smear"]["status"] == "EVALUATED"
     assert report["overall_verdict"] == "PASS"
+    assert report["summary"]["skipped_checks"] == 1
 
 
-def test_smear_default_min_signal_is_20(tmp_path):
+def test_smear_defaults(tmp_path):
+    """No options: min_signal 20 and a 15-column running median."""
     cfg = copy.deepcopy(CONFIG)
     cfg["metrics"]["vertical_smear"] = {"type": "vertical_smear"}
     assert QAConfigValidator(cfg, filename="smear").validate() == []
-    path = write_mef(tmp_path, "faint.fits", [arc_frame(60.0), arc_frame(2000.0)])
+    path = write_mef(tmp_path, "faint.fits", [arc_frame(150.0), arc_frame(2000.0, halo=0.2)])
     report = QAEngine(cfg, cameras_down=[]).run(path)
     assert by_rule(report, "1.A.Red")["vertical_smear"]["status"] == "SKIPPED"
-    assert by_rule(report, "1.B.Red")["vertical_smear"]["status"] == "EVALUATED"
+    full = by_rule(QAEngine(CONFIG, cameras_down=[]).run(path), "1.B.Red")["vertical_smear"]
+    assert by_rule(report, "1.B.Red")["vertical_smear"]["measured_value"] == full["measured_value"]
+    assert E.DEFAULT_SMEAR_SMOOTH == 15 and E.DEFAULT_MIN_SIGNAL_SMEAR == 20.0
 
 
 def test_one_sort_per_axis_per_detector(tmp_path, monkeypatch):
@@ -204,6 +287,9 @@ def test_one_sort_per_axis_per_detector(tmp_path, monkeypatch):
 @pytest.mark.parametrize("field, value, message", [
     ("background_region", "nowhere", "must name a region"),
     ("min_signal", -1, "non-negative"),
+    ("smooth_columns", 0, "positive integer"),
+    ("smooth_columns", 2.5, "positive integer"),
+    ("smooth_columns", True, "positive integer"),
     ("threshold", 5, "unknown field"),
 ])
 def test_validator_checks_smear_options(field, value, message):
@@ -211,6 +297,13 @@ def test_validator_checks_smear_options(field, value, message):
     cfg["metrics"]["vertical_smear"][field] = value
     errors = [f"{e.path}: {e.message}" for e in QAConfigValidator(cfg, filename="smear").validate()]
     assert any("vertical_smear" in e and message in e for e in errors), errors
+
+
+def test_smooth_columns_not_allowed_on_structure_metrics():
+    cfg = copy.deepcopy(CONFIG)
+    cfg["metrics"]["column_banding_norm"]["smooth_columns"] = 15
+    errors = [f"{e.path}: {e.message}" for e in QAConfigValidator(cfg, filename="smear").validate()]
+    assert any("column_banding_norm.smooth_columns" in e and "unknown field" in e for e in errors), errors
 
 
 def test_check_image_end_to_end(tmp_path):
