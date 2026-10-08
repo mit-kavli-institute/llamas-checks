@@ -102,6 +102,13 @@ class QAEngine:
         return str(value).strip().lower()
  
     def run(self, fits_path: Path) -> dict[str, Any]:
+        # Per-run caches: one placeholder test per HDU and one measurement per
+        # (HDU, region, metric). The WARN and FAIL tiers of a check (row_structure /
+        # row_structure_gross, edge_background_level / edge_saturated, ...) differ
+        # only in their limits, so they share the value instead of sorting or
+        # partitioning the same 4-Mpix frame twice.
+        self._placeholder_cache: dict[int, bool] = {}
+        self._metric_cache: dict[tuple[int, str, str], Any] = {}
         # memmap=False is required for FITS files containing BZERO/BSCALE/BLANK
         # keywords, because Astropy needs to scale the image data in memory.
         with fits.open(fits_path, memmap=False) as hdul:
@@ -201,7 +208,7 @@ class QAEngine:
             if hdu_index >= len(hdul):
                 continue
             data = getattr(hdul[hdu_index], "data", None)
-            if data is not None and not self._is_placeholder_data(data):
+            if data is not None and not self._placeholder_for_hdu(hdu_index, data):
                 return extension
         raise QAEngineError("no configured extension with usable image data is available")
 
@@ -353,6 +360,15 @@ class QAEngine:
         except (TypeError, ValueError):
             return None
  
+    def _placeholder_for_hdu(self, hdu_index: int, data: Any) -> bool:
+        """``_is_placeholder_data`` evaluated once per HDU per run."""
+        cache = getattr(self, "_placeholder_cache", None)
+        if cache is None:
+            return self._is_placeholder_data(data)
+        if hdu_index not in cache:
+            cache[hdu_index] = self._is_placeholder_data(data)
+        return cache[hdu_index]
+
     @staticmethod
     def _is_placeholder_data(data: Any) -> bool:
         """Return True for software-generated placeholder images.
@@ -370,12 +386,15 @@ class QAEngine:
         if array.size == 0:
             return False
 
-        finite_values = array[np.isfinite(array)]
-        if finite_values.size == 0:
-            return False
-
-        min_value = float(np.min(finite_values))
-        max_value = float(np.max(finite_values))
+        if np.issubdtype(array.dtype, np.integer):
+            # Integer pixels (raw frames are uint16) are always finite: no mask copy.
+            min_value, max_value = float(array.min()), float(array.max())
+        else:
+            finite_values = array[np.isfinite(array)]
+            if finite_values.size == 0:
+                return False
+            min_value = float(np.min(finite_values))
+            max_value = float(np.max(finite_values))
         return min_value == max_value and min_value in PLACEHOLDER_VALUES
  
     def _skipped_rule_result(
@@ -513,7 +532,7 @@ class QAEngine:
                 message=f"extension {extension_name!r} / HDU {hdu_index} has no image data",
             )
  
-        if self._is_placeholder_data(data):
+        if self._placeholder_for_hdu(hdu_index, data):
             return self._skipped_rule_result(
                 rule_set_name,
                 rule,
@@ -533,15 +552,8 @@ class QAEngine:
         # evaluation error becomes an ERROR result for this rule+extension only —
         # neither aborts QA for the rest of the 24 detectors.
         try:
-            region = self.config["regions"][region_name]
-            metric = self.config["metrics"][metric_name]
-            region_data = self._extract_region(np.asarray(data), region, region_name, extension_name)
-            if metric.get("type") == "background_gradient_rate":
-                # rate metrics need the exposure time; absent/too-short -> SKIP this rule
-                exptime = self._resolve_exptime(hdul, metric)
-                measured_value = self._compute_metric(region_data, metric, exptime=exptime)
-            else:
-                measured_value = self._compute_metric(region_data, metric)
+            measured_value = self._measure(hdul, data, hdu_index, region_name,
+                                           metric_name, extension_name)
             limits, lookup_path = self._resolve_rule_limits(rule, metadata, extension)
         except LookupMissError as exc:
             return self._skipped_rule_result(rule_set_name, rule, extension,
@@ -568,6 +580,46 @@ class QAEngine:
             message=message,
         )
  
+    def _measure(
+        self,
+        hdul: Any,
+        data: Any,
+        hdu_index: int,
+        region_name: str,
+        metric_name: str,
+        extension_name: str | None,
+    ) -> float:
+        """Metric value for one HDU / region / metric, computed once per run.
+
+        Rules that differ only in severity and limits share the measurement. An
+        evaluation failure (LookupMissError / QAEngineError) is cached as well, so
+        every rule on that measurement reports the same SKIP or ERROR.
+        """
+        cache = getattr(self, "_metric_cache", None)
+        key = (hdu_index, region_name, metric_name)
+        if cache is not None and key in cache:
+            outcome = cache[key]
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+        try:
+            region = self.config["regions"][region_name]
+            metric = self.config["metrics"][metric_name]
+            region_data = self._extract_region(np.asarray(data), region, region_name, extension_name)
+            if metric.get("type") == "background_gradient_rate":
+                # rate metrics need the exposure time; absent/too-short -> SKIP this rule
+                exptime = self._resolve_exptime(hdul, metric)
+                value = self._compute_metric(region_data, metric, exptime=exptime)
+            else:
+                value = self._compute_metric(region_data, metric)
+        except QAEngineError as exc:
+            if cache is not None:
+                cache[key] = exc
+            raise
+        if cache is not None:
+            cache[key] = value
+        return value
+
     @staticmethod
     def _extract_region(
         data: Any,
@@ -617,8 +669,18 @@ class QAEngine:
     @staticmethod
     def _compute_metric(region_data: Any, metric: dict[str, Any],
                         exptime: float | None = None) -> float:
-        values = np.asarray(region_data, dtype=float)
-        finite_values = values[np.isfinite(values)]
+        raw = np.asarray(region_data)
+        integer_input = np.issubdtype(raw.dtype, np.integer)
+        if integer_input:
+            # Raw frames are uint16, so every pixel is finite: reduce the integer
+            # array directly instead of making a float64 copy and a finite-mask
+            # copy (two 32 MB copies per rule on a 2048x2048 detector). numpy
+            # accumulates integer means/medians/std in float64, so values match.
+            values = raw
+            finite_values = raw.ravel()
+        else:
+            values = np.asarray(raw, dtype=float)
+            finite_values = values[np.isfinite(values)]
         if finite_values.size == 0:
             raise QAEngineError("metric cannot be computed because the selected "
                                 "region contains no finite pixels")
@@ -648,6 +710,8 @@ class QAEngine:
             return float(np.mean(finite_values))
         
         if metric_type == "median":
+            if integer_input and raw.dtype.itemsize <= 2:
+                return float(integer_median(finite_values))
             return float(np.median(finite_values))
         
         if metric_type == "std":
@@ -657,6 +721,8 @@ class QAEngine:
             # Read-noise monitor: 1.4826 x MAD. A plain std on a 4-Mpix frame is
             # dominated by a handful of hot/saturated pixels or a cosmic-ray
             # cluster (20 railed pixels alone give std ~150 ADU); the MAD is not.
+            if integer_input and raw.dtype.itemsize <= 2:
+                return float(1.4826 * integer_mad(finite_values))
             median = np.median(finite_values)
             return float(1.4826 * np.median(np.abs(finite_values - median)))
 
@@ -796,13 +862,70 @@ class QAEngine:
         }
  
  
+def _value_histogram(values: Any) -> tuple[Any, Any]:
+    """Counts of every integer value present, as (values, counts), values ascending."""
+    flat = np.asarray(values).ravel()
+    low = int(flat.min())
+    counts = np.bincount((flat.astype(np.int64) - low))
+    present = np.flatnonzero(counts)
+    return present + low, counts[present]
+
+
+def _median_from_histogram(values: Any, counts: Any) -> float:
+    """numpy's median (mean of the two middle ranks for an even count) from a histogram."""
+    total = int(counts.sum())
+    cumulative = np.cumsum(counts)
+    upper = float(values[np.searchsorted(cumulative, total // 2 + 1)])
+    if total % 2:
+        return upper
+    lower = float(values[np.searchsorted(cumulative, total // 2)])
+    return (lower + upper) / 2.0
+
+
+def integer_median(values: Any) -> float:
+    """Exact ``np.median`` of an integer array via a value histogram.
+
+    A 4-Mpix uint16 frame has at most 65536 distinct values, so counting them
+    (``np.bincount``) and walking the cumulative counts is several times cheaper
+    than numpy's partition-based median, and gives the same value.
+    """
+    present, counts = _value_histogram(values)
+    return _median_from_histogram(present, counts)
+
+
+def integer_mad(values: Any) -> float:
+    """Exact median absolute deviation, ``np.median(np.abs(x - np.median(x)))``, of an
+    integer array via its value histogram (no 4-Mpix deviation array is formed)."""
+    present, counts = _value_histogram(values)
+    median = _median_from_histogram(present, counts)
+    deviations = np.abs(present - median)
+    order = np.argsort(deviations, kind="stable")
+    return _median_from_histogram(deviations[order], counts[order])
+
+
 def trimmed_mean_profile(values: Any, axis: int, trim: float = STRUCTURE_TRIM_FRACTION) -> Any:
     """Mean along ``axis`` after dropping the lowest/highest ``trim`` fraction of each line.
 
     At least one pixel is trimmed from each end so the metric is defined for short
     test frames; NaNs sort to the top end and are trimmed or ignored by nanmean.
     """
-    ordered = np.sort(np.asarray(values, dtype=float), axis=axis)
+    array = np.asarray(values)
+    if np.issubdtype(array.dtype, np.integer):
+        # Integer frames cannot hold NaN, and numpy sorts 16-bit integers with a
+        # radix sort, several times faster than sorting a float64 copy. Columns
+        # are sorted along the last axis of a contiguous transpose so they cost
+        # the same as rows; the profile keeps its orientation either way.
+        if axis in (-2, array.ndim - 2):
+            array = np.ascontiguousarray(np.swapaxes(array, -1, -2))
+            axis = -1
+        ordered = np.sort(array, axis=axis)
+        n = ordered.shape[axis]
+        k = max(1, int(n * trim))
+        index = [slice(None)] * ordered.ndim
+        index[axis] = slice(k, n - k)
+        return ordered[tuple(index)].mean(axis=axis, dtype=np.float64)
+
+    ordered = np.sort(np.asarray(array, dtype=float), axis=axis)
     n = ordered.shape[axis]
     k = max(1, int(n * trim))
     index = [slice(None)] * ordered.ndim
