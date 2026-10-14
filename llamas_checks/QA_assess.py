@@ -15,6 +15,7 @@ import argparse
 import sys
 
 from .llamasQATests import check_image
+from .qa_engine import DEFAULT_WORKERS
 
 
 def main():
@@ -40,6 +41,12 @@ def main():
     parser.add_argument("--report-all", action="store_true",
                         help="also write a report when the frame passes; by default a "
                              "report is written only for warn and fail (no file = pass)")
+    parser.add_argument("--jobs", type=int, default=None, metavar="N",
+                        help="threads used to measure the 24 extensions in parallel "
+                             f"(default {DEFAULT_WORKERS}; 1 disables threading)")
+    parser.add_argument("--timing", action="store_true",
+                        help="print the per-stage wall time (config, structure, read, "
+                             "metrics, rules, total) to stderr")
     parser.add_argument(
         "--verbose", "-v", action="store_true",
         help="print the result summary and failing-rule detail; by default the tool "
@@ -58,6 +65,7 @@ def main():
             verbose=args.verbose,
             report_dir=args.report_dir,
             report_all=args.report_all,
+            workers=args.jobs,
         )
     except Exception as exc:
         # Exactly one stderr line, even for multi-line messages (validator
@@ -67,6 +75,10 @@ def main():
         return 3
 
     status = results.get("status", "pass")  # "pass" | "warn" | "fail"
+
+    if args.timing:
+        stages = " | ".join(f"{key} {value:.3f}s" for key, value in results.get("timings", {}).items())
+        print(f"timing: {stages}", file=sys.stderr)
 
     # Quiet by default: the exit code IS the interface (0=pass, 1=warn, 2=fail).
     # --verbose opts into the human-readable summary (and the per-rule detail that

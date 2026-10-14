@@ -53,6 +53,11 @@ cameras, placeholders), and a line for every check that fired, naming the detect
   report for passing frames.
 - **Exit codes: `0` pass, `1` warn, `2` fail, `3` system error.**
 - It takes one frame at a time. Pointed at a directory it exits `3`.
+- A full 24-detector frame takes well under a second: every pixel metric is computed
+  once per detector, from a value histogram or a partition rather than a sort, and the
+  detectors are measured in parallel (`--jobs N` threads, default 4; `--jobs 1` disables
+  threading). `--timing` prints the per-stage wall time to stderr so the budget can be
+  checked on the machine that runs the GUI.
 
 ## Checking a whole night
 
@@ -70,7 +75,7 @@ gave it. Pointed at a directory, it:
 - Reads that directory **one level deep only**. Sub-folders are ignored, so a night split into
   `cals/` and `sci/` needs a run per folder.
 - Picks up files ending `.fits`, `.fit` or `.fts` and checks them in parallel (`--jobs`,
-  default 8).
+  default 8 processes; each uses one thread per frame unless `--threads N` is given).
 - Writes a `<frame>.qa.json` report **next to each frame**, in the raw data directory.
 - With `--summary-only`, prints one `filename VERDICT` line per frame once the run finishes,
   in filename order.
@@ -238,7 +243,7 @@ Quiet by default: `0`/`1`/`2` print nothing; `3` always prints one line to stder
 ### `llamas-checks-engine` — one frame or a directory, explicit config
 
 ```
-llamas-checks-engine <file-or-dir> --config <yaml> [--jobs N] [--summary-only] [--no-validate]
+llamas-checks-engine <file-or-dir> --config <yaml> [--jobs N] [--threads N] [--summary-only] [--no-validate]
 ```
 
 `--config` takes a path, or the bare name of a shipped config (`qa_config_cal.yaml`,
@@ -386,6 +391,14 @@ llamas-checks-validate llamas_checks/configs/qa_config_cal.yaml
 llamas-checks-validate llamas_checks/configs/qa_config_science.yaml
 python scripts/gen_thresholds_doc.py             # -> docs/QA_THRESHOLDS_TABLES.md
 python scripts/gen_examples_doc.py               # -> docs/QA_EXAMPLES.md + docs/images/ (needs all five data roots)
+```
+
+To confirm that a change to the engine leaves every verdict and measured value unchanged,
+write reports for the same frames with both versions (`llamas-checks <frame> --report DIR
+--report-all` on each branch) and compare them rule by rule:
+
+```bash
+python scripts/compare_reports.py reports_main/ reports_fast/   # exit 0 = identical
 ```
 
 The raw per-extension statistics are committed (`llamas_checks/baselines/qa_stats_raw.json`), so

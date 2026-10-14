@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -59,35 +60,52 @@ def check_image(
     verbose: bool = False,
     report_dir: str | None = None,
     report_all: bool = False,
+    workers: int | None = None,
 ) -> dict[str, Any]:
     """Run the QA suite on a single calibration or science FITS/MEF image.
 
     Returns a dict with at least ``status`` ("pass"|"warn"|"fail"),
-    ``message`` and ``report_path`` (the JSON file written, or None).
+    ``message``, ``report_path`` (the JSON file written, or None) and
+    ``timings`` (seconds per stage: config, structure, read, metrics, rules,
+    engine, total). ``workers`` is the thread count used to measure the
+    extensions (default ``qa_engine.DEFAULT_WORKERS``).
     Raises ``QAEngineError`` on system-level problems.
     """
+    t_start = time.perf_counter()
     image_path = Path(input_path).expanduser()
     if not image_path.is_file():
         raise QAEngineError(f"input is not a file: {image_path}")
 
     destination = _report_destination(image_path, report, report_dir)
 
+    timings: dict[str, float] = {}
+    t_config = time.perf_counter()
     config_path = _resolve_config_path(qa_yaml, calib_root, suite, image_path)
     config = load_yaml(config_path)
     _validate_config(config, config_path)
+    timings["config"] = time.perf_counter() - t_config
 
+    t_structure = time.perf_counter()
     structure = _inspect_structure(image_path, config.get("extensions"))
+    timings["structure"] = time.perf_counter() - t_structure
 
     engine = QAEngine(config)
     try:
-        engine_report = engine.run(image_path)
+        engine_report = engine.run(image_path, workers=workers)
     except QAEngineError as exc:
         # Config is valid, so a runtime error means this image/header is unfit
         # for the rules it matched -> a QA failure, not a system error.
         if verbose:
             _print_structure(structure)
+        timings["total"] = time.perf_counter() - t_start
         return _result("fail", f"QA could not be completed: {exc}",
-                       suite, image_path, destination, report_all, structure=structure)
+                       suite, image_path, destination, report_all, structure=structure,
+                       timings=timings)
+
+    for stage in ("read", "metrics", "rules"):
+        timings[stage] = engine_report["timings"].get(stage, 0.0)
+    timings["engine"] = engine_report["timings"].get("total", 0.0)
+    timings["total"] = time.perf_counter() - t_start
 
     structure["placeholder_extensions"] = sorted(
         {r["extension"] for r in engine_report["results"] if r["status"] == "PLACEHOLDER"})
@@ -97,7 +115,8 @@ def check_image(
     # Header preflight: the image type must be identifiable from the header.
     if not engine_report["active_rule_sets"]:
         return _result("fail", _unidentified_message(engine_report, config),
-                       suite, image_path, destination, report_all, engine_report, structure)
+                       suite, image_path, destination, report_all, engine_report, structure,
+                       timings)
 
     # An unevaluable rule (region out of bounds, no finite pixels, unsupported
     # metric) gives an ERROR verdict: the frame could not be judged, so it is a
@@ -106,7 +125,8 @@ def check_image(
         errors = [r["message"] for r in engine_report["results"] if r["status"] == "ERROR"]
         extra = "" if len(errors) <= 3 else f" (+{len(errors) - 3} more)"
         return _result("fail", "QA could not be completed: " + "; ".join(errors[:3]) + extra,
-                       suite, image_path, destination, report_all, engine_report, structure)
+                       suite, image_path, destination, report_all, engine_report, structure,
+                       timings)
 
     status = _VERDICT_TO_STATUS[engine_report["overall_verdict"]]
     message = _build_message(engine_report)
@@ -114,7 +134,7 @@ def check_image(
         _print_details(engine_report)
 
     return _result(status, message, suite, image_path, destination, report_all,
-                   engine_report, structure)
+                   engine_report, structure, timings)
 
 
 def _report_destination(image_path: Path, report: str | None,
@@ -249,6 +269,7 @@ def _result(
     report_all: bool,
     engine_report: dict[str, Any] | None = None,
     structure: dict[str, Any] | None = None,
+    timings: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
         "status": status,
@@ -259,6 +280,7 @@ def _result(
             "n_extensions": None, "expected_extensions": None, "missing_cameras": [],
             "identity_mismatches": [], "placeholder_extensions": []},
         "report_path": None,
+        "timings": {key: round(value, 4) for key, value in (timings or {}).items()},
     }
     if engine_report is not None:
         result["overall_verdict"] = engine_report["overall_verdict"]
