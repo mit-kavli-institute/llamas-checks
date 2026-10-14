@@ -285,6 +285,7 @@ def _result(
     if engine_report is not None:
         result["overall_verdict"] = engine_report["overall_verdict"]
         result["summary"] = engine_report["summary"]
+        result["workers"] = engine_report.get("workers")
 
     # A passing frame needs no report: write only for warn/fail unless asked for
     # every frame. The directory is created on write, so a pass leaves no trace.

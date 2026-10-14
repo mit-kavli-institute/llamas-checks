@@ -14,6 +14,8 @@ Exit codes: 0 = pass, 1 = warn, 2 = fail, 3 = system error
 import argparse
 import sys
 
+import llamas_checks
+
 from .llamasQATests import check_image
 from .qa_engine import DEFAULT_WORKERS
 
@@ -79,6 +81,10 @@ def main():
     if args.timing:
         stages = " | ".join(f"{key} {value:.3f}s" for key, value in results.get("timings", {}).items())
         print(f"timing: {stages}", file=sys.stderr)
+        # Which code actually ran: a launcher (the observing GUI) can inherit a
+        # PYTHONPATH or cwd that shadows the installed package.
+        print(f"source: {llamas_checks.__file__} python={sys.executable} "
+              f"workers={results.get('workers', 'default')}", file=sys.stderr)
 
     # Quiet by default: the exit code IS the interface (0=pass, 1=warn, 2=fail).
     # --verbose opts into the human-readable summary (and the per-rule detail that
