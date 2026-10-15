@@ -12,6 +12,7 @@ Exit codes: 0 = pass, 1 = warn, 2 = fail, 3 = system error
 """
 
 import argparse
+import os
 import sys
 
 import llamas_checks
@@ -48,14 +49,25 @@ def main():
                              f"(default {DEFAULT_WORKERS}; 1 disables threading)")
     parser.add_argument("--timing", action="store_true",
                         help="print the per-stage wall time (config, structure, read, "
-                             "metrics, rules, total) to stderr")
+                             "metrics, rules, engine, report, total) and the package "
+                             "source to stderr; same as LLAMAS_CHECKS_TIMING=1")
+    parser.add_argument("--cameras-down", default=None, metavar="NAMES",
+                        help="comma-separated detector names allowed to be missing or "
+                             "placeholder without failing (e.g. 1.A.Blue,4.A.Blue; 'none' "
+                             "for none). Overrides the LLAMAS_CHECKS_CAMERAS_DOWN "
+                             "environment variable and camera_status.yaml (looked up in "
+                             "--calib-root, then the shipped configs/)")
     parser.add_argument(
         "--verbose", "-v", action="store_true",
-        help="print the result summary and failing-rule detail; by default the tool "
-             "is quiet and signals only through its exit code "
-             "(0=pass, 1=warn, 2=fail, 3=system error).",
+        help="print the result summary (with the elapsed seconds) and failing-rule "
+             "detail; by default the tool is quiet and signals only through its exit "
+             "code (0=pass, 1=warn, 2=fail, 3=system error). Set LLAMAS_CHECKS_TIMING=1 "
+             "for a per-stage timing line on stderr.",
     )
     args = parser.parse_args()
+    if args.timing:
+        # One timing format for both triggers: check_image prints the stage line.
+        os.environ["LLAMAS_CHECKS_TIMING"] = "1"
 
     try:
         results = check_image(
@@ -68,6 +80,7 @@ def main():
             report_dir=args.report_dir,
             report_all=args.report_all,
             workers=args.jobs,
+            cameras_down=args.cameras_down,
         )
     except Exception as exc:
         # Exactly one stderr line, even for multi-line messages (validator
@@ -78,9 +91,7 @@ def main():
 
     status = results.get("status", "pass")  # "pass" | "warn" | "fail"
 
-    if args.timing:
-        stages = " | ".join(f"{key} {value:.3f}s" for key, value in results.get("timings", {}).items())
-        print(f"timing: {stages}", file=sys.stderr)
+    if args.timing or os.environ.get("LLAMAS_CHECKS_TIMING"):
         # Which code actually ran: a launcher (the observing GUI) can inherit a
         # PYTHONPATH or cwd that shadows the installed package.
         print(f"source: {llamas_checks.__file__} python={sys.executable} "
@@ -91,6 +102,8 @@ def main():
     # check_image prints). A system error still reported above (exit 3), regardless.
     if args.verbose:
         message = results.get("message", status)
+        if results.get("elapsed_s") is not None:
+            message = f"{message} ({results['elapsed_s']:.2f} s)"
         print(message, file=sys.stdout if status == "pass" else sys.stderr)
         if results.get("report_path"):
             print(f"report: {results['report_path']}", file=sys.stderr)

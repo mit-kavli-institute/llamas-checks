@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Generate qa_config_cal.yaml + qa_config_science.yaml from the ROBUST derived
 thresholds. Builds complete per-detector (extension.name x readout_mode) lookup
-tables (color-median fallback for the always-placeholder blue detectors).
+tables; any field without a derived value (a camera with no vetted baseline, e.g.
+1.A.Blue / 4.A.Blue, whose caps are None) takes the colour median of that field,
+and a leaf that still has a missing field is omitted so the rule SKIPs.
 
 Design (2026-09 revision -- see docs/QA_CHECKS_CATALOGUE.md):
 - Background/level checks consume the per-detector unilluminated-stripe band
@@ -17,7 +19,9 @@ Design (2026-09 revision -- see docs/QA_CHECKS_CATALOGUE.md):
       unilluminated bottom stripe itself is at the ADC ceiling (light flooding
       pixels no fibre illuminates -- the signature of a railed/overexposed flat).
 - Level/background/RMS are WARN (drift & warm monitoring); rms uses the robust
-  1.4826*MAD metric; shutter is FAIL; CCD temperature has a WARN band and a FAIL
+  1.4826*MAD metric; shutter is FAIL, except on BIAS where lag beyond the tolerance is
+  WARN and only an actual SEXPTIME above BIAS_SHUTTER_FAIL_S (0.5 s) is FAIL
+  (``shutter_exptime_gross``); CCD temperature has a WARN band and a FAIL
   (shut-off) band.
 - Illuminated frames (flat/sky/arc) get NO full-frame level check (illumination
   varies with exposure time).
@@ -78,9 +82,13 @@ def fallback(pc, mode, color, getter):
 
 
 def build_table(pc, leaf_fn):
-    """leaf_fn(entry) -> dict of numeric fields; None-entries filled by color median
-    of each field."""
+    """leaf_fn(entry) -> dict of numeric fields (None where not derived). Each None
+    field -- or every field of a detector with no derived entry -- is filled with the
+    colour median of that field over the other detectors of the same mode. A leaf
+    with a field that is still None is omitted (the rule SKIPs for that detector):
+    the engine raises on a missing field and the validator rejects nulls."""
     table = {}
+    entries = DER["per_detector"].get(pc, {})
     for name in NAMES:
         color = NAME_COLOR[name]
         for mode in modes_for(pc):
@@ -88,23 +96,57 @@ def build_table(pc, leaf_fn):
             if e:
                 leaf = leaf_fn(e)
             else:
-                sample = next((leaf_fn(x) for x in DER["per_detector"].get(pc, {}).get(mode, {}).values()), None)
+                sample = next((leaf_fn(x) for x in entries.get(mode, {}).values()), None)
                 if sample is None:
                     continue
-                leaf = {}
-                for f in sample:
+                leaf = dict.fromkeys(sample)
+            for f, v in leaf.items():
+                if v is None:
                     leaf[f] = fallback(pc, mode, color, lambda x, f=f: leaf_fn(x)[f])
+            if any(v is None for v in leaf.values()):
+                continue
             table.setdefault(name, {})[mode] = {k: round(float(v), 4) for k, v in leaf.items()}
     return table
 
 
-edge_leaf = lambda e: {"min": e["edge_bg"]["min"], "max": e["edge_bg"]["max"]}
-level_leaf = lambda e: {"med_min": e["full_level"]["med_min"], "med_max": e["full_level"]["med_max"],
-                        "rms_max": e["full_level"]["rms_max"]}
-struct_leaf = lambda e: {"row_max": e["structure"]["row_max"], "col_max": e["structure"]["col_max"],
-                         "row_fail_max": STRUCT_FAIL_FACTOR * e["structure"]["row_max"],
-                         "col_fail_max": STRUCT_FAIL_FACTOR * e["structure"]["col_max"]}
-sat_leaf = lambda e: {"frac_max": e["sat_frac_max"]}
+def _get(e, *keys):
+    """Nested lookup that returns None on a missing key or a null value."""
+    for k in keys:
+        if not isinstance(e, dict):
+            return None
+        e = e.get(k)
+        if e is None:
+            return None
+    return e
+
+
+def _times(factor, v):
+    return None if v is None else factor * v
+
+
+edge_leaf = lambda e: {"min": _get(e, "edge_bg", "min"), "max": _get(e, "edge_bg", "max")}
+level_leaf = lambda e: {"med_min": _get(e, "full_level", "med_min"),
+                        "med_max": _get(e, "full_level", "med_max"),
+                        "rms_max": _get(e, "full_level", "rms_max")}
+struct_leaf = lambda e: {"row_max": _get(e, "structure", "row_max"),
+                         "col_max": _get(e, "structure", "col_max"),
+                         "row_fail_max": _times(STRUCT_FAIL_FACTOR, _get(e, "structure", "row_max")),
+                         "col_fail_max": _times(STRUCT_FAIL_FACTOR, _get(e, "structure", "col_max"))}
+# signal-normalised structure (structure / lamp signal, dimensionless): no gross tier
+struct_norm_leaf = lambda e: {"row_max": _get(e, "structure_norm", "row_max"),
+                              "col_max": _get(e, "structure_norm", "col_max")}
+# Rule sets whose structure rules use the normalised metric. The ThAr line
+# pattern IS the structure and scales with lamp signal (exposure time), so the
+# absolute caps only encoded the baseline exposures (FAST arcs 0.07-0.4 s, SLOW
+# 1 s) and a perfectly good 1 s FAST arc failed on every camera.
+NORMALISED_STRUCTURE_SETS = {"ARC_THAR"}
+MIN_SIGNAL_NORM = 2.0   # ADU above the edge stripe; fainter -> rule SKIPs
+# Vertical halo / smear on arcs (std of the per-column median profile over the lamp
+# signal): the fault the 2026-07-10 commissioning arcs show. Same sets as above.
+smear_leaf = lambda e: {"max": _get(e, "smear", "max")}
+MIN_SIGNAL_SMEAR = 20.0  # ADU; green/blue column medians are noise below this
+SMEAR_SMOOTH_COLUMNS = 15  # running median that removes narrow vertical lines (aggregate_thresholds)
+sat_leaf = lambda e: {"frac_max": _get(e, "sat_frac_max")}
 
 KEYS = [{"from": "extension.name"}, {"from": "metadata.readout_mode"}]
 
@@ -129,6 +171,16 @@ def base_blocks():
             "saturated_fraction": {"type": "fraction_above", "threshold": 63000},
             "row_banding": {"type": "row_structure"},
             "column_banding": {"type": "column_structure"},
+            # lamp frames: structure / (full-frame mean - bottom-stripe median)
+            "row_banding_norm": {"type": "row_structure_norm",
+                                 "background_region": "bottom_stripe", "min_signal": MIN_SIGNAL_NORM},
+            "column_banding_norm": {"type": "column_structure_norm",
+                                    "background_region": "bottom_stripe", "min_signal": MIN_SIGNAL_NORM},
+            # lamp frames: std of the per-column medians (narrow lines removed by a
+            # running median) / lamp signal (vertical halo)
+            "vertical_smear": {"type": "vertical_smear",
+                               "background_region": "bottom_stripe", "min_signal": MIN_SIGNAL_SMEAR,
+                               "smooth_columns": SMEAR_SMOOTH_COLUMNS},
             # camera-warming: quarter-block median gradient / exposure time (ADU/s)
             "background_gradient_rate": {"type": "background_gradient_rate",
                                          "exptime_keys": ["SEXPTIME", "REXPTIME", "EXPTIME"],
@@ -138,11 +190,25 @@ def base_blocks():
     }
 
 
-def shutter_rule(pc):
+def shutter_rule(pc, severity="FAIL"):
     s = DER["shutter"][pc]
-    return {"name": "shutter_exptime_consistency", "severity": "FAIL",
+    return {"name": "shutter_exptime_consistency", "severity": severity,
             "header_check": {"op": "abs_or_rel_diff", "source": "SEXPTIME", "other": "REXPTIME",
                              "abs_tol": s["abs_tol"], "rel_tol": s["rel_tol"]}}
+
+
+# Bias shutter lag is two-tier. A bias requests 0.001 s but the shutter lag routinely
+# leaves SEXPTIME at a few ms and occasionally a few tenths of a second; the frame is
+# still a usable bias, so lag beyond the baseline tolerance is only WARN. The frame
+# FAILs (``shutter_exptime_gross``) only when the actual shutter exposure exceeds
+# BIAS_SHUTTER_FAIL_S -- at that point it is no longer a bias.
+BIAS_SHUTTER_FAIL_S = 0.5  # s, actual SEXPTIME
+
+
+def shutter_gross_rule():
+    return {"name": "shutter_exptime_gross", "severity": "FAIL",
+            "header_check": {"op": "range", "source": "SEXPTIME",
+                             "limits": {"max": BIAS_SHUTTER_FAIL_S}}}
 
 
 # CCD temperature keyword spellings vary across file generations (underscore /
@@ -249,14 +315,17 @@ def level_rules(table, severity="WARN"):
     ]
 
 
-def struct_rules(table, severity, gross=False):
+def struct_rules(table, severity, gross=False, normalised=False):
     """Row/column banding at the per-detector cap with ``severity``; with ``gross``
-    also the FAIL tier at STRUCT_FAIL_FACTOR x cap (fields row_fail_max/col_fail_max)."""
+    also the FAIL tier at STRUCT_FAIL_FACTOR x cap (fields row_fail_max/col_fail_max).
+    ``normalised`` uses the signal-normalised metrics (rule names unchanged)."""
+    row_metric, col_metric = (("row_banding_norm", "column_banding_norm") if normalised
+                              else ("row_banding", "column_banding"))
     rules = [
-        {"name": "row_structure", "region": "full_frame", "metric": "row_banding",
+        {"name": "row_structure", "region": "full_frame", "metric": row_metric,
          "per_extension": True, "severity": severity,
          "expected_from_lookup": {"table": table, "keys": KEYS, "max_field": "row_max"}},
-        {"name": "column_structure", "region": "full_frame", "metric": "column_banding",
+        {"name": "column_structure", "region": "full_frame", "metric": col_metric,
          "per_extension": True, "severity": severity,
          "expected_from_lookup": {"table": table, "keys": KEYS, "max_field": "col_max"}},
     ]
@@ -270,6 +339,14 @@ def struct_rules(table, severity, gross=False):
              "expected_from_lookup": {"table": table, "keys": KEYS, "max_field": "col_fail_max"}},
         ]
     return rules
+
+
+def smear_rule(table, severity="FAIL"):
+    """Vertical halo / smear on lamp frames: std of the per-column median profile over
+    the lamp signal, against the per-detector heavy-tail cap in ``table`` (field max)."""
+    return {"name": "vertical_smear", "region": "full_frame", "metric": "vertical_smear",
+            "per_extension": True, "severity": severity,
+            "expected_from_lookup": {"table": table, "keys": KEYS, "max_field": "max"}}
 
 
 def sat_rule(table, severity):
@@ -298,7 +375,9 @@ def build_cal_config():
     # uniform frames (bias/dark): frame-level band, structure WARN at cap + FAIL at
     #   STRUCT_FAIL_FACTOR x cap, saturation WARN at cap + FAIL above SAT_GROSS_UNIFORM;
     # fixed-lamp frames (LDLS, ThAr): structure FAIL at the heavy-tail cap (~1.5x the worst
-    #   normal frame; only a gross anomaly such as the 2026-07-10 odd arcs trips it);
+    #   normal frame; only a gross anomaly such as the 2026-07-10 odd arcs trips it). For
+    #   ThAr (NORMALISED_STRUCTURE_SETS) the metric is structure / lamp signal, so the cap
+    #   does not depend on the exposure time the observer chose;
     # twilight sky flats: structure WARN only (the metric scales with sky brightness).
     # Every set gets edge_saturated FAIL.
     types = [("CAL.R-BIA", "BIAS", True, "WARN"), ("CAL.R-DRK", "DARK", True, "WARN"),
@@ -306,17 +385,26 @@ def build_cal_config():
              ("CAL.R-ARC", "ARC_THAR", False, "FAIL")]
     for pc, setname, uniform, struct_sev in types:
         eb, st, sa = f"edge_bg_{setname}", f"struct_{setname}", f"sat_{setname}"
+        normalised = setname in NORMALISED_STRUCTURE_SETS
         lookup[eb] = build_table(pc, edge_leaf)
-        lookup[st] = build_table(pc, struct_leaf)
+        lookup[st] = build_table(pc, struct_norm_leaf if normalised else struct_leaf)
         lookup[sa] = build_table(pc, sat_leaf)
-        rules = [shutter_rule(pc), edge_bg_rule(eb, "WARN"), edge_sat_rule()]
+        if pc == "CAL.R-BIA":
+            rules = [shutter_rule(pc, "WARN"), shutter_gross_rule()]
+        else:
+            rules = [shutter_rule(pc)]
+        rules += [edge_bg_rule(eb, "WARN"), edge_sat_rule()]
         if uniform:
             lv = f"level_{setname}"; lookup[lv] = build_table(pc, level_leaf)
             rules += level_rules(lv, "WARN")
             rules += struct_rules(st, struct_sev, gross=True)
             rules += [sat_rule(sa, "WARN"), sat_gross_rule()]
         else:
-            rules += struct_rules(st, struct_sev)
+            rules += struct_rules(st, struct_sev, normalised=normalised)
+            if normalised:
+                sm = f"smear_{setname}"
+                lookup[sm] = build_table(pc, smear_leaf)
+                rules += [smear_rule(sm, "FAIL")]
             rules += [sat_rule(sa, "WARN")]
         rules += temp_rules()
         rule_sets[setname] = {"applies_when": {"exposure_type": pc}, "rules": rules}
@@ -374,7 +462,10 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
 
     hdr = ("# LLAMAS %s QA config -- GENERATED from robust baseline analysis "
-           "(2026-04-07/05-02/06-30; trimmed-mean structure profiles + MAD rms, WARN/FAIL tiers, 2026-09). "
+           "(2026-04-07/05-02/06-30 + 2026-10-14 level-only; trimmed-mean structure profiles + MAD rms, "
+           "WARN/FAIL tiers, 2026-09; ThAr structure normalised by lamp signal + vertical-smear rule "
+           "(15-column running median), 2026-10; level/edge bands = observed range + max(6 sigma, 30 ADU) "
+           "drift margin, 2.B.Green SLOW frozen at its legacy band, 2026-10). "
            "See docs/QA_CHECKS_CATALOGUE.md; regenerate via scripts/gen_configs.py.\n")
     dump(build_cal_config(), os.path.join(args.out_dir, "qa_config_cal.yaml"), hdr % "calibration")
     dump(build_science_config(), os.path.join(args.out_dir, "qa_config_science.yaml"), hdr % "science")

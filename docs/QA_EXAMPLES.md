@@ -310,6 +310,22 @@ Zoomed detector 3.A.Green: median 685 ADU, robust rms 10.4, row structure 7.92, 
 |---|---|---|---|---|
 | WARN | `camera_warming_gradient` | 3.A.Green | 2.086 | max 1.3 |
 
+### Bias with shutter lag (was FAIL)
+
+- File: `/Users/slh/Downloads/20260505_06-selected/LLAMAS_2026-05-06_05-56-30.7_CAL0_mef.fits`
+- Header: `BIAS` / PRODCATG `CAL.R-BIA` / READ-MDE `SLOW` / REXPTIME 0.001 s / SEXPTIME 0.352 s
+- **Verdict: WARN** (`llamas-checks` exit 1); previously: FAIL (shutter_exptime_consistency)
+
+SEXPTIME 0.352 s for a 0.001 s bias: shutter lag beyond the 0.214 s tolerance is WARN (the frame is still a usable bias); only an actual SEXPTIME above 0.5 s FAILs.
+
+![fail_shutter_bias mosaic](images/fail_shutter_bias_mosaic.jpg)
+
+(no live detector in this frame; only the header checks run.)
+
+| severity | rule | detector | value | limit |
+|---|---|---|---|---|
+| WARN | `shutter_exptime_consistency` | - | 0.351 | abs_tol 0.214, rel_tol 0.1 |
+
 
 ## FAIL
 
@@ -446,22 +462,6 @@ Zoomed detector 1.A.Red: median 1677 ADU, robust rms 10.4, row structure 5.56, c
 | FAIL | `shutter_exptime_consistency` | - | 419.1 | abs_tol 1, rel_tol 0.1 |
 
 
-### Bias with the shutter open
-
-- File: `/Users/slh/Downloads/20260505_06-selected/LLAMAS_2026-05-06_05-56-30.7_CAL0_mef.fits`
-- Header: `BIAS` / PRODCATG `CAL.R-BIA` / READ-MDE `SLOW` / REXPTIME 0.001 s / SEXPTIME 0.352 s
-- **Verdict: FAIL** (`llamas-checks` exit 2); previously: FAIL (shutter_exptime_consistency)
-
-SEXPTIME 0.352 s for a 0.001 s bias: not a bias.
-
-![fail_shutter_bias mosaic](images/fail_shutter_bias_mosaic.jpg)
-
-(no live detector in this frame; only the header checks run.)
-
-| severity | rule | detector | value | limit |
-|---|---|---|---|---|
-| FAIL | `shutter_exptime_consistency` | - | 0.351 | abs_tol 0.214, rel_tol 0.1 |
-
 
 ### Baseline LDLS flat with a shutter overrun (June 30)
 
@@ -522,12 +522,12 @@ ValueError: cannot reshape array of size 3967936 into shape (2048,2048)
 | FAST bias with a saturated hot-pixel cluster on 2.A.Red (was FAIL) | FAIL (2.A.Red row 6.1 vs 2.0, column 11.2 vs 2.0; rms 159 vs 18) | **WARN** | 1 |
 | Bright twilight flat (was FAIL) | FAIL (row/column structure 1.00-1.04x cap on four blue/green detectors) | **WARN** | 1 |
 | LDLS flat, 0.3 s, 1.B.Red edge stripe high | WARN (edge_background_level @ 1.B.Red) | **WARN** | 1 |
+| Bias with shutter lag (was FAIL) | FAIL (shutter_exptime_consistency) | **WARN** | 1 |
 | Science frame with a warming camera (3.A.Green) | WARN (camera_warming_gradient @ 3.A.Green) | **WARN** | 1 |
 | LDLS flat, 0.07 s, railed on every detector | WARN (28 warn checks, exit 1) | **FAIL** | 2 |
 | LDLS flat, 0.3 s, edge stripes railed in the reds | WARN (13 warn checks, exit 1) | **FAIL** | 2 |
 | 600 s dark with periodic column bars (June 4) | FAIL (column_structure @ 2.B.Green) | **FAIL** | 2 |
 | ThAr arc with odd structure on every detector (July 10) | FAIL (column_structure on 22/22 detectors) | **FAIL** | 2 |
 | Science frame with a shutter fault (600 s requested) | FAIL (shutter_exptime_consistency) | **FAIL** | 2 |
-| Bias with the shutter open | FAIL (shutter_exptime_consistency) | **FAIL** | 2 |
 | Baseline LDLS flat with a shutter overrun (June 30) | PASS (undetected) | **FAIL** | 2 |
 | Truncated file | exit 3 | **unreadable** | 3 |

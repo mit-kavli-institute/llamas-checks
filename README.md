@@ -40,8 +40,9 @@ llamas-checks /path/to/LLAMAS_..._mef.fits -v
 ```
 
 **Always use `-v` interactively.** Without it the tool is deliberately silent and reports only
-through its exit code. With `-v` you get a one-line verdict, a `structure:` line (extensions present, missing
-cameras, placeholders), and a line for every check that fired, naming the detector responsible.
+through its exit code. With `-v` you get a one-line verdict ending in the elapsed seconds, a
+`structure:` line (extensions present, missing cameras, placeholders, cameras allowed to be down), and a line for every check
+that fired, naming the detector responsible.
 
 - `--report` writes the full per-check detail to `<frame>.qa.json` — the report has the same
   name as the frame it describes (`LLAMAS_..._CAL22_mef.fits` → `LLAMAS_..._CAL22_mef.qa.json`),
@@ -53,11 +54,18 @@ cameras, placeholders), and a line for every check that fired, naming the detect
   report for passing frames.
 - **Exit codes: `0` pass, `1` warn, `2` fail, `3` system error.**
 - It takes one frame at a time. Pointed at a directory it exits `3`.
-- A full 24-detector frame takes well under a second: every pixel metric is computed
-  once per detector, from a value histogram or a partition rather than a sort, and the
-  detectors are measured in parallel (`--jobs N` threads, default 4; `--jobs 1` disables
-  threading). `--timing` prints the per-stage wall time to stderr so the budget can be
-  checked on the machine that runs the GUI.
+- **A full 24-detector frame takes well under a second, and the time depends on the frame type,
+  not on the verdict.** Every pixel metric is computed once per detector, from a value histogram
+  or one sort per axis shared by all the structure/smear rules, and the detectors are measured in
+  parallel (`--jobs N` threads, default 4; `--jobs 1` disables threading). A failing frame costs
+  the same as a passing frame of the same type. On a laptop (median of 3 runs, default 4 threads):
+  ~0.45 s for a science frame, ~0.5 s for a bias or dark, ~0.6 s for an arc or sky flat
+  (~0.7-1.6 s with `--jobs 1`), mostly reading the 200 MB file and sorting/histogramming each
+  4-Mpix detector. If a machine is much slower than that, run with `--timing` or
+  `LLAMAS_CHECKS_TIMING=1` to get a per-stage line on stderr (`timing: <frame> <status> total=…
+  config=… structure=… read=… metrics=… rules=… engine=… report=…`; `--timing` also prints which
+  package file and interpreter ran); the JSON report and the Python result also carry the total
+  as `elapsed_s` and the stages as `timings`.
 
 ## Checking a whole night
 
@@ -128,9 +136,10 @@ on a bias means the frame is not usable as a bias, not that one detector is nois
 
 | Check | What it catches | Level |
 |---|---|---|
-| Shutter vs requested time | shutter stuck open, exposure aborted or truncated | **FAIL** |
+| Shutter vs requested time | shutter stuck open, exposure aborted or truncated | **FAIL**; on a bias, shutter lag beyond the tolerance is WARN and only an actual exposure above 0.5 s is **FAIL** |
 | Edge stripe saturated | light flooding the unilluminated edge of the detector: a railed or grossly overexposed frame | **FAIL** (every frame type, incl. science) |
-| Row / column structure | banding, bars, a warming glow | bias/dark: WARN above the detector's cap, **FAIL** above 4× the cap; LDLS and ThAr (fixed lamp): **FAIL** above the cap; sky flats: WARN |
+| Row / column structure | banding, bars, a warming glow | bias/dark: WARN above the detector's cap, **FAIL** above 4× the cap; LDLS: **FAIL** above the cap; ThAr arcs: **FAIL** above the cap on structure ÷ lamp signal (exposure-independent); sky flats: WARN |
+| Vertical smear (ThAr arcs only) | a vertical halo or charge smear around the lines, as on the 2026-07-10 commissioning arcs | **FAIL** above the detector's cap on std(per-column median) ÷ lamp signal |
 | Saturation | light leak or saturated pixels (above 63000 ADU) | WARN above the detector's cap; bias/dark **FAIL** above 1 % of the frame |
 | CCD temperature — warm / hot / shut-off | cooling degrading or failed | WARN / **FAIL** / **FAIL** |
 | Background level and read noise | bias-level drift, excess noise | WARN |
@@ -143,6 +152,24 @@ on a bias means the frame is not usable as a bias, not that one detector is nois
   MAD-based robust sigma. Hot pixels, hot-column fragments and cosmic rays therefore do not move
   them; whole-row/column banding, bars and glow gradients do. (Until 2026-09 these used plain
   means and a plain std, and a ~20-pixel saturated cluster could FAIL an otherwise perfect bias.)
+- On ThAr arcs the structure *is* the line pattern, so the raw metric grows with the lamp signal
+  (exposure time). The arc rules therefore use structure **divided by the lamp signal** (full-frame
+  mean minus the unilluminated bottom-stripe median), which gives the same number for a 0.07 s
+  and a 1 s arc of the same lamp; the caps come from all 39 baseline arcs regardless of readout
+  mode. Before this (2026-10) the fast-mode caps encoded the 0.07–0.4 s baseline exposures and a
+  perfectly good 1 s fast arc failed on every camera. The rule SKIPs on a detector with less than
+  2 ADU of signal.
+- Saturated lines are normal on an arc (the reds saturate at 1 s). What is *not* normal is a
+  **vertical halo or smear** around the lines, so arcs also get a `vertical_smear` check: the
+  standard deviation of the per-column *median* profile, smoothed with a 15-column running
+  median, divided by the lamp signal. A narrow curved line occupies a small fraction of each
+  column and leaves the column medians at the background; a line that happens to run straight
+  down a column (saturated or not, one to a few columns wide) does lift that column's median but
+  is removed by the running median; a halo is tens of columns wide, survives it and lifts the
+  profile. Normal arcs measure ~0.03 on a red camera at any exposure, the 2026-07-10
+  commissioning arcs 0.1–1.4. The median comes from the same sorted array as the column
+  structure, so the check costs nothing extra; it SKIPs below 20 ADU of signal (green/blue
+  cameras on the shortest ~0.07 s arcs).
 - The structure limits are set separately for each detector and are deliberately generous:
   naturally structured detectors (4.A.Red's left-edge glow, 3.A.Blue's fixed banding) and red
   ThAr arcs that normally saturate pass comfortably. On LDLS flats the red detectors are commonly
@@ -152,11 +179,36 @@ on a bias means the frame is not usable as a bias, not that one detector is nois
   does not depend on the exposure time used.
 - Worked examples with images of frames that pass, warn and fail are in
   [`docs/QA_EXAMPLES.md`](docs/QA_EXAMPLES.md).
-- Cameras missing from the frame are skipped, never failed. A missing camera appears as a
-  placeholder extension (a constant frame of all-ones in real frames, all-zeros from the pipeline
-  validator; any other constant frame, e.g. a railed detector, is evaluated normally) or as an
-  absent HDU; both are
-  listed in the report's `structure` block.
+- **Every camera must deliver data.** A camera that is missing from the frame is a **FAIL**
+  (`camera_present@<detector>`, exit 2) unless it is listed as down (next section). A missing
+  camera appears as a placeholder extension (a constant frame of all-ones in real frames,
+  all-zeros from the pipeline validator; any other constant frame, e.g. a railed detector, is
+  evaluated normally) or as an absent HDU; both are listed in the report's `structure` block,
+  and the pixel rules on such a camera are skipped (status `PLACEHOLDER` / `MISSING`).
+
+### Cameras down for maintenance
+
+When a camera is out for repair, list it in
+[`llamas_checks/configs/camera_status.yaml`](llamas_checks/configs/camera_status.yaml) so its
+absence does not fail every frame:
+
+```yaml
+cameras_down:
+  - 1.A.Blue
+  - 4.A.Blue
+```
+
+Remove it again when the camera is back. The file is the only thing to edit; it is hand-written
+(not regenerated with the thresholds) and ships with the package, so on the observatory machine
+it lives in the installed package's `configs/` directory. A listed camera that *does* deliver
+data is simply checked like any other. A misspelt name is a system error (exit 3) naming the
+valid detectors, so a typo can never silently forgive nothing. For a one-off run, or for a GUI
+that would rather not edit files, the same list can be given as `--cameras-down 1.A.Blue,4.A.Blue`
+(`none` for no cameras down), as the `LLAMAS_CHECKS_CAMERAS_DOWN` environment variable, or as a
+`camera_status.yaml` inside the `--calib-root` directory; precedence is flag, environment,
+calib-root file, shipped file. The list in force is printed on the `-v` `structure:` line
+(`down (allowed): …`) and stored in the report (`structure.cameras_down`,
+`structure.cameras_down_source`, `report.cameras_down`).
 
 ### Science frames
 
@@ -192,6 +244,9 @@ worth acting on even when the temperature reads fine.**
 
 - **FAIL — shutter.** The frame is not the exposure you requested. Retake it, and check the
   shutter before continuing the sequence.
+- **WARN — bias shutter lag.** The shutter took longer than usual to close on a bias (actual
+  exposure above the 0.214 s tolerance but no more than 0.5 s). The frame is still a usable bias;
+  keep an eye on the shutter. Above 0.5 s the bias FAILs.
 - **FAIL — structure.** Inspect the detector named in the output. Do not use the frame as a
   master calibration.
 - **FAIL — temperature hot or shut-off.** Cooling needs attention. Data from that camera will
@@ -243,12 +298,15 @@ Quiet by default: `0`/`1`/`2` print nothing; `3` always prints one line to stder
 ### `llamas-checks-engine` — one frame or a directory, explicit config
 
 ```
-llamas-checks-engine <file-or-dir> --config <yaml> [--jobs N] [--threads N] [--summary-only] [--no-validate]
+llamas-checks-engine <file-or-dir> --config <yaml> [--jobs N] [--threads N] [--summary-only] [--no-validate] [--cameras-down NAMES]
 ```
 
 `--config` takes a path, or the bare name of a shipped config (`qa_config_cal.yaml`,
 `qa_config_science.yaml`, `qa_config.yaml`). `--no-validate` skips the schema check of the
-config before the run. A `<name>.qa.json` is written next to every input frame.
+config before the run. `--jobs N` is the number of frames checked in parallel in directory
+mode (processes); `--threads N` the threads measuring the detectors of one frame (default 4 for
+a single file, 1 per frame in directory mode). `--cameras-down` overrides `configs/camera_status.yaml` the same way as
+for `llamas-checks`. A `<name>.qa.json` is written next to every input frame.
 
 | Exit | Meaning |
 |:--:|---|
@@ -278,7 +336,11 @@ editing or regenerating a YAML.
   "suite": "basic_cal",
   "fits_file": "/path/to/LLAMAS_..._mef.fits",
   "report_path": "/path/to/reports/LLAMAS_..._mef.qa.json",
+  "elapsed_s": 0.52,
+  "timings": {"config": 0.021, "structure": 0.007, "read": 0.11, "metrics": 0.36,
+              "rules": 0.003, "engine": 0.49, "total": 0.52},
   "overall_verdict": "WARN",
+  "workers": 4,
   "summary": {"total_checks": 190, "evaluated_checks": 154, "skipped_checks": 36,
               "passed_checks": 152, "failed_checks": 2, "fail_effects": 0, "warn_effects": 2,
               "missing_extensions": 0, "placeholder_extensions": 2},
@@ -287,14 +349,19 @@ editing or regenerating a YAML.
     "expected_extensions": 24,
     "missing_cameras": [],
     "identity_mismatches": [],
-    "placeholder_extensions": ["1.A.Blue", "2.A.Blue"]
+    "placeholder_extensions": ["1.A.Blue", "2.A.Blue"],
+    "cameras_down": ["1.A.Blue", "2.A.Blue"],
+    "cameras_down_source": "/path/to/site-packages/llamas_checks/configs/camera_status.yaml"
   },
   "report": { "...the full engine report: metadata, active_rule_sets, results[]..." }
 }
 ```
 
 `status` (`pass`/`warn`/`fail`) is what the exit code is derived from. `report_path` is the file
-this JSON was written to (`null` in the returned dict when nothing was written). `overall_verdict`,
+this JSON was written to (`null` in the returned dict when nothing was written). `elapsed_s` is the
+wall-clock time of the whole check in seconds (in the file, as of the moment it was written);
+`timings` breaks it into stages (seconds) and `workers` is the thread count the engine used.
+`overall_verdict`,
 `summary` and `report` are present whenever the engine ran; `report.results` is the per-rule list
 (`rule`, `extension`, `hdu_index`, `measured_value`, `limits`, `passed`, `severity`,
 `verdict_effect`, `status` = `EVALUATED`/`SKIPPED`/`PLACEHOLDER`/`MISSING`/`ERROR`, `message`).
@@ -306,8 +373,11 @@ present (`len(hdul) - 1`), `expected_extensions` is 24, `missing_cameras` lists 
 extensions whose header `BENCH`/`SIDE`/`COLOR` disagree with the position they occupy
 (`{extension, hdu_index, header_identity}`), and `placeholder_extensions` lists extensions
 that are present but constant-valued (from the engine results with status `PLACEHOLDER`; empty
-when no engine report was produced). It is informational: **the structure block never changes
-`status` or the exit code.**
+when no engine report was produced), and `cameras_down` / `cameras_down_source` the allow-list
+in force and where it came from. It is informational: **the structure block never changes
+`status` or the exit code.** What does is the engine's `camera_present` check, one result per
+configured camera in `report.results` (rule set `STRUCTURE`, `measured_value` 1 = data present,
+0 = absent or placeholder, FAIL unless the camera is in `report.cameras_down`).
 
 The engine's own `<frame>.qa.json` (written by `llamas-checks-engine`) is the inner `report`
 object on its own: `fits_file`, `instrument`, `metadata`, `active_rule_sets`, `overall_verdict`,
@@ -354,7 +424,16 @@ missing/placeholder cameras — pass `--report <night log dir>` (or `--report-di
 creates the directory) and read `<night log dir>/<frame>.qa.json`, laid out as described above. The file exists only when the
 frame warned or failed (exit `1` or `2`); on exit `0` there is nothing to read, unless the GUI
 also passes `--report-all`. Do not give the GUI `llamas-checks-engine`: its exit codes mean
-different things and it writes reports into the raw data directory.
+different things and it writes reports into the raw data directory. When a camera is down for
+maintenance, nothing changes in the GUI: an operator lists it in the installed
+`configs/camera_status.yaml` (see "Cameras down for maintenance"), or the GUI passes
+`--cameras-down <names>` itself.
+
+If the GUI imposes a timeout, size it by frame type rather than by verdict: biases and darks
+have the most pixel checks, science frames the fewest, and a failing frame is no slower than a
+passing one of the same type. To see where the time goes on the GUI machine, set
+`LLAMAS_CHECKS_TIMING=1` in its environment and read the `timing:` line from stderr, or read
+`elapsed_s` from the report.
 
 ## Regenerating thresholds
 
@@ -404,7 +483,29 @@ python scripts/compare_reports.py reports_main/ reports_fast/   # exit 0 = ident
 The raw per-extension statistics are committed (`llamas_checks/baselines/qa_stats_raw.json`), so
 everything from `aggregate_thresholds.py` onwards can be reproduced without the baseline frames.
 
+To add a night as a new baseline epoch without re-extracting the old ones, merge its frames into
+the committed statistics and re-run from `aggregate_thresholds.py` onwards:
+
+```bash
+python scripts/extract_stats.py --update llamas_checks/baselines/qa_stats_raw.json \
+    --files "/path/to/night/LLAMAS_2026-10-14_*_mef.fits" --jobs 6
+```
+
+How an epoch is used is registered at the top of `scripts/aggregate_thresholds.py` (records are
+keyed by their DATE-OBS `date`):
+
+- `LEVEL_ONLY_EPOCHS`: epochs that feed only the edge-background / level bands and the tracking
+  CSV, not the structure, rms, saturation or smear caps nor the shutter and temperature
+  tolerances (2026-10-14 is level-only).
+- `EXCLUDED_RECORDS`: `(date, PRODCATG)` sets dropped from every derivation (the saturated
+  2026-10-14 LDLS flats).
+- `LEGACY_BAND_DETECTORS`: `(detector, mode)` pairs that keep the legacy band
+  `median ± max(6σ, 15 ADU)` and whose level-only records are held out (2.B.Green SLOW, known-bad
+  in October). Every other band is the observed range over all healthy epochs widened by
+  `max(6σ, DRIFT_MARGIN_ADU)` (30 ADU).
+
 `aggregate_thresholds.py` prints its self-checks (band breaches among normal frames, the held-out
+level-only records of the frozen detectors against their legacy band, the held-out
 June-2026 odd dark against the dark structure caps, and — when `--warm-dir` is set — the warm
 folder against the shutter, edge-background and temperature limits). `extract_stats.py --out`,
 `aggregate_thresholds.py --raw/--out-dir` and `gen_configs.py --derived/--out-dir` let you keep
@@ -432,7 +533,8 @@ llamas_checks/                 the package
   qa_config_validator.py       config schema check + `llamas-checks-validate` CLI
   validate.py                  MEF structure inspection (inspect_structure, detector_label)
   paths.py                     CONFIG_DIR, BASELINES_DIR, shipped config names
-  configs/                     qa_config.yaml (base), qa_config_cal.yaml, qa_config_science.yaml (generated)
+  configs/                     qa_config.yaml (base), qa_config_cal.yaml, qa_config_science.yaml (generated),
+                               camera_status.yaml (hand-edited: cameras allowed to be down)
   baselines/                   qa_stats_raw.json (per-extension baseline stats), qa_thresholds_derived.json, qa_tracking_baselines.csv
 scripts/                       threshold pipeline + validation + doc generators (see above)
 tests/                         pytest suite

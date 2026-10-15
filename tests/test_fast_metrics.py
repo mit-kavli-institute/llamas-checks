@@ -254,3 +254,95 @@ def test_short_exposure_skips_rate_rule_without_affecting_others(tmp_path):
     warming = [r for r in report["results"] if r["rule"] == "warming"]
     assert {r["status"] for r in warming if r["extension"] not in ("2.A.Red", "2.A.Green")} == {"SKIPPED"}
     assert report["overall_verdict"] == "FAIL"     # structure/saturation still evaluated
+
+
+# ---------------------------------------------------------------- shared line profiles
+def sorted_median(values, axis):
+    return np.nanmedian(np.sort(np.asarray(values, dtype=float), axis=axis), axis=axis)
+
+
+@pytest.mark.parametrize("dtype", [np.uint16, np.float32, np.float64])
+@pytest.mark.parametrize("shape", [(32, 2048), (2048, 33), (10, 10), (3, 200), (7, 3)])
+def test_line_profiles_with_median_equal_sorted_profiles(dtype, shape):
+    from llamas_checks.qa_engine import line_profiles
+    rng = np.random.default_rng(11)
+    values = rng.integers(0, 65536, size=shape).astype(dtype)
+    for axis in (-1, -2, 0, 1):
+        trimmed, median = line_profiles(values, axis)
+        with np.errstate(all="ignore"):
+            np.testing.assert_array_equal(trimmed, sorted_profile(values, axis))
+        np.testing.assert_array_equal(median, sorted_median(values, axis))
+        only_trimmed, none = line_profiles(values, axis, median=False)
+        assert none is None
+        np.testing.assert_array_equal(only_trimmed, trimmed)
+
+
+LAMP_CONFIG = {
+    **CONFIG,
+    "extensions": CONFIG["extensions"][:3],
+    "metrics": {
+        "row_banding": {"type": "row_structure"},
+        "row_banding_norm": {"type": "row_structure_norm"},
+        "smear": {"type": "vertical_smear", "smooth_columns": 5},
+        "column_banding_norm": {"type": "column_structure_norm"},
+    },
+    "rule_sets": {
+        "ARC": {
+            "applies_when": {"exposure_type": "CAL.R-BIA"},
+            "rules": [
+                {"name": "row_structure", "region": "full_frame", "metric": "row_banding",
+                 "per_extension": True, "severity": "WARN", "limits": {"max": 1e6}},
+                {"name": "row_structure_norm", "region": "full_frame", "metric": "row_banding_norm",
+                 "per_extension": True, "severity": "WARN", "limits": {"max": 1e6}},
+                {"name": "vertical_smear", "region": "full_frame", "metric": "smear",
+                 "per_extension": True, "severity": "FAIL", "limits": {"max": 1e6}},
+                {"name": "column_structure_norm", "region": "full_frame",
+                 "metric": "column_banding_norm", "per_extension": True, "severity": "WARN",
+                 "limits": {"max": 1e6}},
+            ],
+        }
+    },
+}
+
+
+def write_lamp_mef(tmp_path):
+    rng = np.random.default_rng(5)
+    primary = fits.PrimaryHDU()
+    primary.header["PRODCATG"] = "CAL.R-BIA"
+    primary.header["READ-MDE"] = "SLOW"
+    hdus = [primary]
+    for i in range(3):
+        frame = rng.normal(700, 3, SHAPE)
+        frame[30:, :] += 400 + 100 * i                       # lamp signal above the stripe
+        frame[:, 500 + 40 * i: 530 + 40 * i] += 150          # a halo some columns wide
+        hdus.append(fits.ImageHDU(data=np.floor(frame).astype(np.uint16)))
+    path = tmp_path / "lamp_mef.fits"
+    fits.HDUList(hdus).writeto(path, overwrite=True)
+    return path
+
+
+def test_profile_metrics_share_one_partition_per_axis_and_ignore_threads(tmp_path, monkeypatch):
+    import llamas_checks.qa_engine as E
+    path = write_lamp_mef(tmp_path)
+    calls = []
+    original = E.line_profiles
+
+    def counting(values, axis, *args, **kwargs):
+        calls.append(axis)
+        return original(values, axis, *args, **kwargs)
+
+    monkeypatch.setattr(E, "line_profiles", counting)
+    serial = QAEngine(LAMP_CONFIG, cameras_down=[]).run(path, workers=1)
+    assert sorted(calls) == [-2, -2, -2, -1, -1, -1]          # one per (detector, axis)
+    calls.clear()
+    threaded_engine = QAEngine(LAMP_CONFIG, cameras_down=[])
+    threaded = threaded_engine.run(path, workers=4)
+    assert sorted(calls) == [-2, -2, -2, -1, -1, -1]
+    assert strip_timings(serial) == strip_timings(threaded)
+    evaluated = [r for r in serial["results"] if r["rule"] != "camera_present"]
+    assert len(evaluated) == 12 and all(r["status"] == "EVALUATED" for r in evaluated)
+    for entry in threaded_engine.last_run.extensions.values():
+        assert set(entry.profiles) == {("full_frame", -1), ("full_frame", -2)}
+        assert entry.profiles[("full_frame", -2)][1] is not None    # median placed for smear
+        assert entry.profiles[("full_frame", -1)][1] is None        # no smear rule on rows
+        assert len(entry.signals) == 1

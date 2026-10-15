@@ -70,6 +70,9 @@ class QAConfigValidator:
         "count_above",
         "row_structure",
         "column_structure",
+        "row_structure_norm",
+        "column_structure_norm",
+        "vertical_smear",
         "background_gradient_rate",
     }
     SEVERITIES = {"PASS", "WARN", "FAIL"}
@@ -256,6 +259,27 @@ class QAConfigValidator:
                     self.add_error(f"{path}.exptime_keys", "must be a list of non-empty strings")
                 if "min_exptime" in metric and not self.is_number(metric.get("min_exptime")):
                     self.add_error(f"{path}.min_exptime", "must be numeric")
+            if mtype in {"row_structure_norm", "column_structure_norm", "vertical_smear"}:
+                # optional: the region whose median is the background (default
+                # bottom_stripe) and the minimum signal below which the rule SKIPs
+                allowed.update({"background_region", "min_signal"})
+                regions = self.config.get("regions")
+                bg = metric.get("background_region")
+                if bg is not None and not (isinstance(bg, str)
+                                           and isinstance(regions, dict) and bg in regions):
+                    self.add_error(f"{path}.background_region",
+                                   "must name a region defined in 'regions'")
+                if "min_signal" in metric and not (self.is_number(metric.get("min_signal"))
+                                                   and float(metric["min_signal"]) >= 0):
+                    self.add_error(f"{path}.min_signal", "must be a non-negative number")
+            if mtype == "vertical_smear":
+                # optional: width (columns) of the running median that removes narrow
+                # vertical lines from the column-median profile before the std
+                allowed.add("smooth_columns")
+                sc = metric.get("smooth_columns")
+                if sc is not None and not (isinstance(sc, int) and not isinstance(sc, bool)
+                                           and sc >= 1):
+                    self.add_error(f"{path}.smooth_columns", "must be a positive integer")
             for field, value in metric.items():
                 if field not in allowed:
                     self.add_error(f"{path}.{field}", "unknown field for this metric type")

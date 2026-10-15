@@ -13,7 +13,11 @@
 
 The structure report is attached as ``result["structure"]`` on every return
 path (with ``placeholder_extensions`` taken from the engine's PLACEHOLDER
-results). It is informational only and never changes ``status``.
+results and ``cameras_down`` the allow-list in force). It is informational
+only and never changes ``status``; what does is the engine's per-camera
+``camera_present`` check: a camera that is absent or a placeholder FAILs
+unless it is listed in ``configs/camera_status.yaml`` (or ``--cameras-down`` /
+``LLAMAS_CHECKS_CAMERAS_DOWN``, see ``qa_engine.resolve_cameras_down``).
 
 Failure model:
 - *System* problems (missing file/config, invalid config, astropy absent)
@@ -37,6 +41,7 @@ Report files:
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -45,7 +50,7 @@ from typing import Any
 from .paths import CAL_CONFIG_NAME, CONFIG_DIR, DEFAULT_CONFIG_NAME, SCIENCE_CONFIG_NAME
 from .qa_config_validator import QAConfigValidator
 from .qa_engine import (FITS_SUFFIXES, QAEngine, QAEngineError, fits as _fits, load_yaml,
-                        report_path_for)
+                        report_path_for, resolve_cameras_down)
 from .validate import inspect_structure
 
 _VERDICT_TO_STATUS = {"PASS": "pass", "WARN": "warn", "FAIL": "fail"}
@@ -61,51 +66,65 @@ def check_image(
     report_dir: str | None = None,
     report_all: bool = False,
     workers: int | None = None,
+    cameras_down: str | None = None,
 ) -> dict[str, Any]:
     """Run the QA suite on a single calibration or science FITS/MEF image.
 
     Returns a dict with at least ``status`` ("pass"|"warn"|"fail"),
     ``message``, ``report_path`` (the JSON file written, or None) and
-    ``timings`` (seconds per stage: config, structure, read, metrics, rules,
-    engine, total). ``workers`` is the thread count used to measure the
-    extensions (default ``qa_engine.DEFAULT_WORKERS``).
-    Raises ``QAEngineError`` on system-level problems.
+    ``elapsed_s`` (wall-clock seconds spent in this call, report write included),
+    plus ``timings`` (seconds per stage: config, structure, read, metrics, rules,
+    engine, report, total) and ``workers`` (the thread count used to measure the
+    extensions; ``workers=None`` means ``qa_engine.DEFAULT_WORKERS``).
+    Raises ``QAEngineError`` on system-level problems (including an unknown
+    camera name in the cameras-down list).
+
+    ``cameras_down`` is a comma-separated list of detectors allowed to be
+    missing or placeholder (``"none"`` for none); ``None`` falls back to the
+    ``LLAMAS_CHECKS_CAMERAS_DOWN`` environment variable, then
+    ``<calib_root>/camera_status.yaml``, then the shipped
+    ``configs/camera_status.yaml``.
+
+    Set ``LLAMAS_CHECKS_TIMING=1`` to print a per-stage timing line to stderr.
     """
-    t_start = time.perf_counter()
+    started = time.perf_counter()
+    stages = _StageTimer(started)
     image_path = Path(input_path).expanduser()
     if not image_path.is_file():
         raise QAEngineError(f"input is not a file: {image_path}")
 
     destination = _report_destination(image_path, report, report_dir)
 
-    timings: dict[str, float] = {}
-    t_config = time.perf_counter()
     config_path = _resolve_config_path(qa_yaml, calib_root, suite, image_path)
     config = load_yaml(config_path)
     _validate_config(config, config_path)
-    timings["config"] = time.perf_counter() - t_config
+    # Cameras allowed to be down: a bad list (unknown name, malformed file) is a
+    # system problem, so it raises here like an invalid config would.
+    down_names, down_source = resolve_cameras_down(cameras_down, calib_root)
+    engine = QAEngine(config, cameras_down=down_names)
+    stages.mark("config")
 
-    t_structure = time.perf_counter()
     structure = _inspect_structure(image_path, config.get("extensions"))
-    timings["structure"] = time.perf_counter() - t_structure
+    structure["cameras_down"] = list(engine.cameras_down)
+    structure["cameras_down_source"] = down_source
+    stages.mark("structure")
 
-    engine = QAEngine(config)
     try:
         engine_report = engine.run(image_path, workers=workers)
     except QAEngineError as exc:
         # Config is valid, so a runtime error means this image/header is unfit
         # for the rules it matched -> a QA failure, not a system error.
+        stages.mark("engine")
         if verbose:
             _print_structure(structure)
-        timings["total"] = time.perf_counter() - t_start
         return _result("fail", f"QA could not be completed: {exc}",
                        suite, image_path, destination, report_all, structure=structure,
-                       timings=timings)
-
+                       stages=stages)
+    # The engine's own stages (read, metrics, rules) are listed before the
+    # wall time of the whole engine call, which also covers opening the file.
     for stage in ("read", "metrics", "rules"):
-        timings[stage] = engine_report["timings"].get(stage, 0.0)
-    timings["engine"] = engine_report["timings"].get("total", 0.0)
-    timings["total"] = time.perf_counter() - t_start
+        stages.set(stage, engine_report.get("timings", {}).get(stage, 0.0))
+    stages.mark("engine")
 
     structure["placeholder_extensions"] = sorted(
         {r["extension"] for r in engine_report["results"] if r["status"] == "PLACEHOLDER"})
@@ -116,7 +135,7 @@ def check_image(
     if not engine_report["active_rule_sets"]:
         return _result("fail", _unidentified_message(engine_report, config),
                        suite, image_path, destination, report_all, engine_report, structure,
-                       timings)
+                       stages=stages)
 
     # An unevaluable rule (region out of bounds, no finite pixels, unsupported
     # metric) gives an ERROR verdict: the frame could not be judged, so it is a
@@ -126,7 +145,7 @@ def check_image(
         extra = "" if len(errors) <= 3 else f" (+{len(errors) - 3} more)"
         return _result("fail", "QA could not be completed: " + "; ".join(errors[:3]) + extra,
                        suite, image_path, destination, report_all, engine_report, structure,
-                       timings)
+                       stages=stages)
 
     status = _VERDICT_TO_STATUS[engine_report["overall_verdict"]]
     message = _build_message(engine_report)
@@ -134,7 +153,39 @@ def check_image(
         _print_details(engine_report)
 
     return _result(status, message, suite, image_path, destination, report_all,
-                   engine_report, structure, timings)
+                   engine_report, structure, stages=stages)
+
+
+class _StageTimer:
+    """Wall-clock seconds per stage of ``check_image``: config, structure, the
+    engine's read / metrics / rules, the whole engine call, and the report."""
+
+    def __init__(self, started: float):
+        self.started = started
+        self._last = started
+        self.stages: dict[str, float] = {}
+
+    def mark(self, name: str) -> None:
+        """Close stage ``name`` at the current time."""
+        now = time.perf_counter()
+        self.stages[name] = now - self._last
+        self._last = now
+
+    def set(self, name: str, seconds: float) -> None:
+        """Record a sub-stage measured elsewhere (the engine's own timings)."""
+        self.stages[name] = float(seconds)
+
+    def elapsed(self) -> float:
+        return round(time.perf_counter() - self.started, 3)
+
+    def as_dict(self) -> dict[str, float]:
+        timings = {name: round(seconds, 4) for name, seconds in self.stages.items()}
+        timings["total"] = self.elapsed()
+        return timings
+
+    def line(self, image_path: Path, status: str) -> str:
+        parts = " ".join(f"{name}={seconds:.3f}" for name, seconds in self.stages.items())
+        return f"timing: {image_path.name} {status} total={self.elapsed():.3f}s {parts}"
 
 
 def _report_destination(image_path: Path, report: str | None,
@@ -167,6 +218,7 @@ def _inspect_structure(image_path: Path, extensions: list[dict[str, Any]] | None
                      "missing_cameras": [], "identity_mismatches": [],
                      "error": f"{type(exc).__name__}: {exc}"}
     structure["placeholder_extensions"] = []
+    structure["cameras_down"] = []
     return structure
 
 
@@ -179,7 +231,8 @@ def _print_structure(structure: dict[str, Any]) -> None:
     line = (f"structure: {structure['n_extensions']}/{structure['expected_extensions']} "
             f"extensions; missing: {fmt(structure['missing_cameras'])}; "
             f"placeholder: {fmt(structure['placeholder_extensions'])}; "
-            f"identity mismatches: {fmt(mismatches)}")
+            f"identity mismatches: {fmt(mismatches)}; "
+            f"down (allowed): {fmt(structure.get('cameras_down', []))}")
     if structure.get("error"):
         line += f"; error: {structure['error']}"
     print(line, file=sys.stderr)
@@ -269,7 +322,7 @@ def _result(
     report_all: bool,
     engine_report: dict[str, Any] | None = None,
     structure: dict[str, Any] | None = None,
-    timings: dict[str, float] | None = None,
+    stages: _StageTimer | None = None,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
         "status": status,
@@ -278,9 +331,9 @@ def _result(
         "fits_file": str(image_path),
         "structure": structure if structure is not None else {
             "n_extensions": None, "expected_extensions": None, "missing_cameras": [],
-            "identity_mismatches": [], "placeholder_extensions": []},
+            "identity_mismatches": [], "placeholder_extensions": [], "cameras_down": []},
         "report_path": None,
-        "timings": {key: round(value, 4) for key, value in (timings or {}).items()},
+        "timings": stages.as_dict() if stages is not None else {},
     }
     if engine_report is not None:
         result["overall_verdict"] = engine_report["overall_verdict"]
@@ -291,10 +344,22 @@ def _result(
     # every frame. The directory is created on write, so a pass leaves no trace.
     if destination is not None and (report_all or status != "pass"):
         result["report_path"] = str(destination)
+        if stages is not None:
+            result["timings"] = stages.as_dict()
+            result["elapsed_s"] = result["timings"]["total"]
         payload = dict(result)
         if engine_report is not None:
             payload["report"] = engine_report
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+    # Wall-clock time for the whole check, so a slow machine can be diagnosed
+    # from the result itself; the report carries the value as of its write.
+    if stages is not None:
+        stages.mark("report")
+        result["timings"] = stages.as_dict()
+        result["elapsed_s"] = result["timings"]["total"]
+        if os.environ.get("LLAMAS_CHECKS_TIMING"):
+            print(stages.line(image_path, status), file=sys.stderr)
 
     return result

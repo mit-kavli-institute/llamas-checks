@@ -425,6 +425,61 @@ def test_verbose_structure_line_lists_placeholder(tmp_path, good_frame, cfg):
     structure_lines = [l for l in proc.stderr.splitlines() if l.startswith("structure:")]
     assert len(structure_lines) == 1, proc.stderr
     assert "placeholder: 1.A.Green" in structure_lines[0]
+    assert structure_lines[0].endswith("down (allowed): none")
+    # an unlisted placeholder camera fails the frame
+    assert proc.returncode == 2, (proc.returncode, proc.stderr)
+    assert "FAIL camera_present @ 1.A.Green" in proc.stderr
+    assert "FAIL: 1 fail check(s): camera_present@1.A.Green" in proc.stderr
+
+
+def test_cameras_down_flag_forgives_placeholder(tmp_path, good_frame, cfg):
+    with fits.open(good_frame, mode="update") as hdul:
+        hdul[1].data = np.ones((40, 40), dtype=np.int16)
+    out = tmp_path / "down.json"
+    proc = run_cli(["-m", "llamas_checks", good_frame, "--qa-yaml", cfg, "-v",
+                    "--cameras-down", "1.a.green", "--report", str(out), "--report-all"],
+                   cwd=tmp_path)
+    assert proc.returncode == 0, (proc.returncode, proc.stderr)
+    structure_line = next(l for l in proc.stderr.splitlines() if l.startswith("structure:"))
+    assert structure_line.endswith("down (allowed): 1.A.Green")
+    payload = json.loads(out.read_text())
+    assert payload["structure"]["cameras_down"] == ["1.A.Green"]
+    assert payload["structure"]["cameras_down_source"] == "cli"
+    assert payload["report"]["cameras_down"] == ["1.A.Green"]
+
+
+def test_cameras_down_env_and_calib_root_file(tmp_path, good_frame, cfg):
+    with fits.open(good_frame, mode="update") as hdul:
+        hdul[1].data = np.ones((40, 40), dtype=np.int16)
+    env_backup = os.environ.get("LLAMAS_CHECKS_CAMERAS_DOWN")
+    try:
+        os.environ["LLAMAS_CHECKS_CAMERAS_DOWN"] = "1.A.Green"
+        proc = run_cli(["-m", "llamas_checks", good_frame, "--qa-yaml", cfg], cwd=tmp_path)
+        assert proc.returncode == 0, (proc.returncode, proc.stderr)
+        # the flag beats the environment
+        proc = run_cli(["-m", "llamas_checks", good_frame, "--qa-yaml", cfg,
+                        "--cameras-down", "none"], cwd=tmp_path)
+        assert proc.returncode == 2, (proc.returncode, proc.stderr)
+    finally:
+        if env_backup is None:
+            os.environ.pop("LLAMAS_CHECKS_CAMERAS_DOWN", None)
+        else:
+            os.environ["LLAMAS_CHECKS_CAMERAS_DOWN"] = env_backup
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "camera_status.yaml").write_text("cameras_down: [1.A.Green]\n")
+    proc = run_cli(["-m", "llamas_checks", good_frame, "--qa-yaml", cfg,
+                    "--calib-root", str(root)], cwd=tmp_path)
+    assert proc.returncode == 0, (proc.returncode, proc.stderr)
+
+
+def test_cameras_down_typo_is_one_line_system_error(tmp_path, good_frame, cfg):
+    proc = run_cli(["-m", "llamas_checks", good_frame, "--qa-yaml", cfg,
+                    "--cameras-down", "1.A.Bleu"], cwd=tmp_path)
+    assert proc.returncode == 3, (proc.returncode, proc.stdout, proc.stderr)
+    lines = proc.stderr.splitlines()
+    assert len(lines) == 1 and lines[0].startswith("system error")
+    assert "unknown camera name(s) 1.A.Bleu" in lines[0]
 
 
 @pytest.mark.parametrize("kind", ["invalid_config", "yaml_syntax"])

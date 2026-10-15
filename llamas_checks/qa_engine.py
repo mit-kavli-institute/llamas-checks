@@ -19,6 +19,14 @@ Running:
   (e.g. ``qa_config_cal.yaml``) which is resolved against the package
   ``configs/`` directory.
 
+Camera presence:
+- Every configured camera must deliver data. A camera whose HDU is absent or
+  whose image is a constant placeholder (every pixel 0 or 1 = not read out)
+  FAILs the ``camera_present`` check unless it is listed in
+  ``configs/camera_status.yaml`` (``cameras_down:``), the file observers edit
+  when a camera is out for maintenance. ``--cameras-down`` / the
+  ``LLAMAS_CHECKS_CAMERAS_DOWN`` environment variable override that file.
+
 Output:
 - Every processed FITS file gets a ``<stem>.qa.json`` sidecar written next to
   it (an error report if the file could not be evaluated).
@@ -32,6 +40,7 @@ import argparse
 import concurrent.futures
 import fnmatch
 import json
+import os
 import sys
 import time
 from dataclasses import asdict, dataclass, field
@@ -59,14 +68,47 @@ FITS_SUFFIXES = (
 STRUCTURE_TRIM_FRACTION = 0.02
 
 # Threads used to measure the extensions of one frame in parallel. The numpy
-# kernels (partition, bincount) release the GIL, so four threads bring a 24-detector
-# frame from ~1.9 s to ~0.6 s on a laptop; more gives little and competes with the
-# observing GUI. Batch mode already runs one process per file and uses one thread.
+# kernels (sort, partition, bincount) release the GIL, so four threads bring a
+# 24-detector frame from ~1.1-1.6 s to ~0.5-0.6 s on a laptop; more gives little and
+# competes with the observing GUI. Batch mode already runs one process per file and uses one thread.
 DEFAULT_WORKERS = 4
 
 # Constant-frame values that mark a software placeholder for a missing camera:
 # 1.0 in real frames, 0.0 from the pipeline validator (validate.create_placeholder_hdu).
 PLACEHOLDER_VALUES = (0.0, 1.0)
+
+# Signal-normalised structure metrics: the row/column structure of a lamp frame
+# (ThAr arc) is the line pattern itself and scales with the lamp signal, so the
+# absolute metric encodes exposure time. These divide it by the frame's signal
+# above the unilluminated edge stripe (full-region mean - background-region
+# median), which makes 0.07 s and 1 s arcs comparable.
+STRUCTURE_NORM_TYPES = ("row_structure_norm", "column_structure_norm")
+DEFAULT_SIGNAL_REGION = "bottom_stripe"
+DEFAULT_MIN_SIGNAL = 2.0   # ADU; below this the ratio is noise and the rule SKIPs
+
+# Vertical smear / halo on a lamp frame: a narrow curved arc line occupies a small
+# fraction of every column, so the per-column MEDIAN sits at the background; a
+# vertical halo or charge smear fills whole columns around the bright lines and
+# lifts the median of just those columns. std(per-column median) / lamp signal is
+# therefore ~0.03 on a normal red arc at any exposure and >1 on a smeared one.
+# The median profile is read off the same sorted lines as the column structure
+# metric, so the rule costs no extra pixel pass. Below ~20 ADU of signal the
+# green/blue column medians are read-noise dominated, hence the higher default.
+# A saturated line that happens to run vertically also lifts the median of its
+# one to four columns, and that is normal on an arc; the column-median profile is
+# therefore smoothed with a running median of DEFAULT_SMEAR_SMOOTH columns before
+# the std, which removes anything narrower than ~half that width (lines, bloomed
+# lines, a single hot column) and keeps halos (tens of columns wide).
+SMEAR_TYPES = ("vertical_smear",)
+DEFAULT_MIN_SIGNAL_SMEAR = 20.0
+DEFAULT_SMEAR_SMOOTH = 15   # columns; 1 disables the smoothing
+# Metric types that need the line profiles of the region (shared per HDU).
+_PROFILE_TYPES = ("row_structure", "column_structure") + STRUCTURE_NORM_TYPES + SMEAR_TYPES
+
+
+def _profile_axis(metric_type: str) -> int:
+    """-1 collapses columns into a per-row profile; -2 collapses rows into a per-column profile."""
+    return -1 if metric_type.startswith("row_structure") else -2
  
  
 @dataclass
@@ -93,12 +135,27 @@ class QAEngineError(RuntimeError):
 
 @dataclass
 class _ExtensionCache:
-    """Pixel data and precomputed metrics for one configured extension."""
+    """Pixel data, precomputed metrics and shared intermediates for one extension.
+
+    Everything below ``metrics`` is per-extension scratch filled by the one thread
+    that measures this extension, so it needs no locking: the WARN and FAIL tiers
+    of a check, the level and rms rules, and the structure / normalised-structure /
+    smear metrics of one axis all reuse one histogram, one sort and one signal.
+    """
     data: Any                      # ndarray, or None when the HDU is absent / has no image
     present: bool                  # hdu_index < len(hdul)
     placeholder: bool = False
     # (region_name, metric_name) -> measured float, or the QAEngineError to re-raise
     metrics: dict[tuple[str, str], Any] = field(default_factory=dict)
+    # region_name -> IntegerHistogram of that region (16-bit integer data only)
+    histograms: dict[str, Any] = field(default_factory=dict)
+    # (region_name, axis) -> (trimmed-mean profile, median profile or None)
+    profiles: dict[tuple[str, int], tuple[Any, Any]] = field(default_factory=dict)
+    # (region_name, background_region) -> lamp signal (region mean - background median)
+    signals: dict[tuple[str, str], float] = field(default_factory=dict)
+    # (region_name, axis) pairs a smear rule needs the median profile of, so the
+    # one sort / partition of that axis also yields the median profile
+    want_median: set[tuple[str, int]] = field(default_factory=set)
 
 
 @dataclass
@@ -115,11 +172,127 @@ class LookupMissError(QAEngineError):
     Treated as a benign SKIP for that one rule+extension (e.g. an off-mode frame
     whose readout mode is not modelled), rather than an ERROR that aborts the file.
     """
- 
- 
+
+
+# ---------------------------------------------------------------------------
+# Cameras allowed to be down (missing HDU or placeholder image without a FAIL).
+# The list lives in a small hand-edited YAML next to the generated QA configs so
+# it survives regeneration and can be changed without touching code.
+# ---------------------------------------------------------------------------
+CAMERA_STATUS_NAME = "camera_status.yaml"
+DEFAULT_CAMERA_STATUS = CONFIG_DIR / CAMERA_STATUS_NAME
+CAMERAS_DOWN_ENV = "LLAMAS_CHECKS_CAMERAS_DOWN"
+CAMERA_PRESENT_RULE = "camera_present"
+_NO_CAMERAS_DOWN_WORDS = {"", "none", "[]"}
+
+
+def parse_cameras_down(text: str | None) -> list[str]:
+    """Split a ``--cameras-down`` / environment value into detector names.
+
+    Comma, semicolon or whitespace separated; ``""``, ``none`` and ``[]`` mean
+    no cameras down. Names are returned as written (validated later against the
+    config's extension names).
+    """
+    if text is None:
+        return []
+    cleaned = text.strip()
+    if cleaned.lower() in _NO_CAMERAS_DOWN_WORDS:
+        return []
+    for sep in (",", ";"):
+        cleaned = cleaned.replace(sep, " ")
+    return [part for part in cleaned.split() if part]
+
+
+def load_cameras_down(path: Path | str | None = None) -> list[str]:
+    """Read ``cameras_down:`` from a camera status YAML (the shipped one by default).
+
+    The file must be a mapping whose ``cameras_down`` entry is a list of detector
+    names (``null`` / ``[]`` for none). Anything else raises ``QAEngineError`` so
+    a typo in the file is a loud system error rather than a silently ignored list.
+    """
+    status_path = Path(path) if path is not None else DEFAULT_CAMERA_STATUS
+    if not status_path.is_file():
+        raise QAEngineError(f"camera status file not found: {status_path}")
+    try:
+        with status_path.open("r", encoding="utf-8") as handle:
+            content = yaml.safe_load(handle)
+    except yaml.YAMLError as exc:
+        raise QAEngineError(f"YAML syntax error in {status_path}: {exc}") from exc
+    if content is None:  # comments only: nothing down
+        return []
+    if not isinstance(content, dict) or "cameras_down" not in content:
+        raise QAEngineError(
+            f"{status_path}: expected a mapping with a 'cameras_down' list"
+        )
+    names = content["cameras_down"]
+    if names is None:
+        return []
+    if isinstance(names, str):
+        names = parse_cameras_down(names)
+    if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
+        raise QAEngineError(
+            f"{status_path}: 'cameras_down' must be a list of detector names "
+            "(e.g. [1.A.Blue, 4.A.Blue]) or []"
+        )
+    return [name.strip() for name in names if name.strip()]
+
+
+def resolve_cameras_down(cli_value: str | None = None,
+                         calib_root: str | Path | None = None) -> tuple[list[str], str]:
+    """Pick the cameras-down list and say where it came from.
+
+    Precedence: an explicit value (``--cameras-down``), then the
+    ``LLAMAS_CHECKS_CAMERAS_DOWN`` environment variable, then
+    ``<calib_root>/camera_status.yaml`` when a calib root is given and has one,
+    then the shipped ``configs/camera_status.yaml``. Returns ``(names, source)``
+    with ``source`` one of ``"cli"``, ``"env"`` or the file path read.
+    """
+    if cli_value is not None:
+        return parse_cameras_down(cli_value), "cli"
+    env_value = os.environ.get(CAMERAS_DOWN_ENV)
+    if env_value is not None:
+        return parse_cameras_down(env_value), "env"
+    if calib_root is not None:
+        candidate = Path(calib_root).expanduser() / CAMERA_STATUS_NAME
+        if candidate.is_file():
+            return load_cameras_down(candidate), str(candidate)
+    return load_cameras_down(DEFAULT_CAMERA_STATUS), str(DEFAULT_CAMERA_STATUS)
+
+
+def canonical_cameras_down(names: list[str] | tuple[str, ...] | set[str],
+                           extensions: list[dict[str, Any]],
+                           source: str = "cameras-down list") -> list[str]:
+    """Map down-camera names onto the configured extension names (case-insensitive).
+
+    Returns the canonical names in detector order. Unknown names raise
+    ``QAEngineError`` naming them and the valid choices, so a misspelt camera can
+    never silently forgive nothing.
+    """
+    by_key = {QAEngine.normalize(ext["name"]): ext["name"] for ext in extensions}
+    unknown = sorted({name for name in names if QAEngine.normalize(name) not in by_key})
+    if unknown:
+        raise QAEngineError(
+            f"{source}: unknown camera name(s) {', '.join(unknown)}; "
+            f"valid names are {', '.join(ext['name'] for ext in extensions)}"
+        )
+    wanted = {QAEngine.normalize(name) for name in names}
+    return [ext["name"] for ext in extensions if QAEngine.normalize(ext["name"]) in wanted]
+
+
 class QAEngine:
-    def __init__(self, config: dict[str, Any]):
+    def __init__(self, config: dict[str, Any],
+                 cameras_down: list[str] | tuple[str, ...] | set[str] | None = None):
+        """``cameras_down``: detector names allowed to be missing or placeholder
+        without failing; ``None`` reads the shipped ``configs/camera_status.yaml``.
+        """
         self.config = config
+        if cameras_down is None:
+            cameras_down = load_cameras_down()
+        self.cameras_down = canonical_cameras_down(cameras_down, config["extensions"])
+        self._cameras_down_keys = {self.normalize(name) for name in self.cameras_down}
+        # What the last run() measured (extensions, metrics, histograms, profiles,
+        # signals); a fresh _RunCache per run, kept only for inspection.
+        self.last_run: _RunCache | None = None
  
     @staticmethod
     def normalize(value: Any) -> str:
@@ -142,12 +315,16 @@ class QAEngine:
         with fits.open(fits_path, memmap=False) as hdul:
             metadata = self._extract_metadata(hdul)
             active_rule_sets = self._select_rule_sets(metadata)
-            results: list[RuleResult] = []
+            cache = self._precompute(hdul, active_rule_sets, workers, timings)
+            self.last_run = cache
+
+            # Camera presence is structural, so it is checked for every frame
+            # type (even one no rule set matches). It reads the per-extension
+            # presence / placeholder flags _precompute already set: no pixel work.
+            results: list[RuleResult] = self._camera_presence_results(cache)
 
             if not active_rule_sets:
                 results.append(self._no_rules_matched_result(metadata))
-
-            cache = self._precompute(hdul, active_rule_sets, workers, timings)
 
             t_rules = time.perf_counter()
             for rule_set_name, rule_set in active_rule_sets.items():
@@ -179,12 +356,66 @@ class QAEngine:
             "instrument": self.config.get("instrument", {}),
             "metadata": metadata,
             "active_rule_sets": list(active_rule_sets.keys()),
+            "cameras_down": list(self.cameras_down),
             "overall_verdict": verdict,
             "summary": self._summary(results),
             "results": [asdict(result) for result in results],
             "workers": workers,
             "timings": {key: round(value, 4) for key, value in timings.items()},
         }
+
+    def _camera_presence_results(self, cache: _RunCache) -> list[RuleResult]:
+        """One ``camera_present`` result per configured camera.
+
+        A camera whose HDU is absent, has no image, or holds a placeholder image
+        (constant 0/1 = not read out) FAILs unless it is in ``cameras_down``; a
+        listed camera passes with a note, and a listed camera that did deliver
+        data is simply evaluated like any other (no warning). ``measured_value``
+        is 1 when data is present, 0 otherwise, against ``min: 1``.
+        """
+        results: list[RuleResult] = []
+        for extension in self.config["extensions"]:
+            name = extension.get("name")
+            hdu_index = extension["hdu_index"]
+            listed = self.normalize(name) in self._cameras_down_keys
+            entry = cache.extensions.get(hdu_index)
+            absent_reason: str | None = None
+            if entry is None or not entry.present:
+                absent_reason = f"HDU {hdu_index} is absent from the file"
+            elif entry.data is None:
+                absent_reason = f"HDU {hdu_index} has no image data"
+            elif entry.placeholder:
+                absent_reason = (f"HDU {hdu_index} is a placeholder image "
+                                 "(constant frame, camera not read out)")
+            if absent_reason is None:
+                passed = True
+                message = ("camera delivered data"
+                           + ("; listed as down but evaluated normally" if listed else ""))
+            elif listed:
+                passed = True
+                message = (f"camera {name} {absent_reason}; listed as down in "
+                           f"{CAMERA_STATUS_NAME}, its checks are skipped")
+            else:
+                passed = False
+                message = (f"camera {name} {absent_reason} and is not listed as down "
+                           f"in {CAMERA_STATUS_NAME}")
+            results.append(RuleResult(
+                rule_set="STRUCTURE",
+                rule=CAMERA_PRESENT_RULE,
+                extension=name,
+                hdu_index=hdu_index,
+                region="full_frame",
+                metric=CAMERA_PRESENT_RULE,
+                measured_value=0.0 if absent_reason else 1.0,
+                passed=passed,
+                severity="FAIL",
+                verdict_effect="PASS" if passed else "FAIL",
+                limits={"min": 1.0},
+                lookup_path=None,
+                status="EVALUATED",
+                message=message,
+            ))
+        return results
 
     def _precompute(
         self,
@@ -241,6 +472,11 @@ class QAEngine:
                 except QAEngineError:
                     continue  # raised again, unchanged, at evaluation time
                 needed.setdefault(extension["hdu_index"], {})[(region_name, rule["metric"])] = extension
+                metric_type = self.config["metrics"].get(rule["metric"], {}).get("type")
+                if metric_type in SMEAR_TYPES:
+                    # this axis is sorted once for all its profile metrics; the
+                    # median profile is only formed where a smear rule reads it
+                    entry.want_median.add((region_name, _profile_axis(metric_type)))
 
         for metric_name, metric in self.config["metrics"].items():
             if metric.get("type") == "background_gradient_rate":
@@ -251,10 +487,9 @@ class QAEngine:
 
         def measure_extension(hdu_index: int) -> None:
             entry = cache.extensions[hdu_index]
-            histograms: dict[str, Any] = {}
             for (region_name, metric_name), extension in needed[hdu_index].items():
                 entry.metrics[(region_name, metric_name)] = self._measure(
-                    entry.data, region_name, metric_name, extension, cache, histograms)
+                    entry.data, region_name, metric_name, extension, cache, entry)
 
         jobs = list(needed)
         if workers > 1 and len(jobs) > 1:
@@ -273,23 +508,86 @@ class QAEngine:
         metric_name: str,
         extension: dict[str, Any],
         cache: _RunCache,
-        histograms: dict[str, Any] | None = None,
+        entry: _ExtensionCache,
     ) -> Any:
-        """One metric on one extension: the value, or the QAEngineError to re-raise."""
+        """One metric on one extension: the value, or the QAEngineError to re-raise.
+
+        Intermediates shared between metrics of this extension (the region's value
+        histogram, the per-axis line profiles, the lamp signal) live in ``entry``,
+        so the structure, normalised-structure and smear metrics of one axis cost
+        one sort, and the level / rms / background rules one histogram.
+        """
         try:
             region = self.config["regions"][region_name]
             metric = self.config["metrics"][metric_name]
-            region_data = self._extract_region(data, region, region_name, extension.get("name"))
-            if metric.get("type") == "background_gradient_rate":
+            extension_name = extension.get("name")
+            region_data = self._extract_region(data, region, region_name, extension_name)
+            metric_type = metric.get("type")
+            if metric_type == "background_gradient_rate":
                 # rate metrics need the exposure time; absent/too-short -> SKIP this rule
                 exptime = cache.exptimes.get(metric_name)
                 if isinstance(exptime, Exception):
                     raise exptime
                 return self._compute_metric(region_data, metric, exptime=exptime)
-            return self._compute_metric(region_data, metric, histograms=histograms,
+            if metric_type in _PROFILE_TYPES:
+                axis = _profile_axis(metric_type)
+                need_median = metric_type in SMEAR_TYPES or (region_name, axis) in entry.want_median
+                profiles = entry.profiles.get((region_name, axis))
+                if profiles is None or (need_median and profiles[1] is None):
+                    # module-level lookup so a test can count the sorts
+                    if need_median:
+                        profiles = line_profiles(region_data, axis)
+                    else:
+                        profiles = line_profiles(region_data, axis, median=False)
+                    entry.profiles[(region_name, axis)] = profiles
+                signal = None
+                if metric_type in STRUCTURE_NORM_TYPES or metric_type in SMEAR_TYPES:
+                    # normalised metrics need the lamp signal; too faint -> SKIP this rule
+                    signal = self._resolve_signal(entry, data, region_name, region_data,
+                                                  metric, extension_name)
+                return self._compute_metric(region_data, metric, signal=signal,
+                                            profiles=profiles)
+            return self._compute_metric(region_data, metric, histograms=entry.histograms,
                                         region_name=region_name)
         except QAEngineError as exc:
             return exc
+
+    def _resolve_signal(self, entry: _ExtensionCache, data: Any, region_name: str,
+                        region_data: Any, metric: dict[str, Any],
+                        extension_name: str | None) -> float:
+        """Lamp signal for a normalised-structure or smear metric: mean of the metric's
+        region minus the median of ``metric['background_region']`` (default
+        bottom_stripe), computed once per extension per run. Below
+        ``metric['min_signal']`` (default 2 ADU for structure, 20 ADU for smear)
+        raises LookupMissError so the rule is SKIPPED, like a too-short exposure for
+        the gradient-rate metric: the ratio of two noise terms would be meaningless.
+        The background median reuses the region's value histogram when the level
+        rules already built it (16-bit integer data).
+        """
+        background_region = metric.get("background_region", DEFAULT_SIGNAL_REGION)
+        default_min = (DEFAULT_MIN_SIGNAL_SMEAR if metric.get("type") in SMEAR_TYPES
+                       else DEFAULT_MIN_SIGNAL)
+        min_signal = float(metric.get("min_signal", default_min))
+        key = (region_name, background_region)
+        if key in entry.signals:
+            signal = entry.signals[key]
+        else:
+            background = self.config["regions"].get(background_region)
+            if background is None:
+                raise QAEngineError(f"background_region {background_region!r} of a normalised "
+                                    "structure metric is not a configured region")
+            background_data = self._extract_region(np.asarray(data), background,
+                                                   background_region, extension_name)
+            signal = (self._compute_metric(region_data, {"type": "mean"})
+                      - self._compute_metric(background_data, {"type": "median"},
+                                             histograms=entry.histograms,
+                                             region_name=background_region))
+            entry.signals[key] = signal
+        if not np.isfinite(signal) or signal < min_signal:
+            raise LookupMissError(
+                f"signal {signal:.4g} ADU (region mean minus {background_region} median) is "
+                f"below min_signal {min_signal:g}; structure not normalised for this detector")
+        return signal
 
 
     def _extract_metadata(self, hdul: Any) -> dict[str, Any]:
@@ -509,19 +807,23 @@ class QAEngine:
         Any other constant frame (e.g. a railed detector at the ADC ceiling, or
         a dead readout at a non-zero pedestal) is *not* a placeholder and is
         evaluated normally, so saturation/structure rules can still fire on it.
-        Placeholder extensions are reported but skipped from metric evaluation
-        and do not affect the final PASS/WARN/FAIL verdict.
+        Placeholder extensions are skipped by the metric rules (status
+        PLACEHOLDER); whether they fail the frame is decided once per camera by
+        the ``camera_present`` check against ``cameras_down``.
         """
         array = np.asarray(data)
         if array.size == 0:
             return False
 
-        finite_values = array[np.isfinite(array)]
-        if finite_values.size == 0:
-            return False
-
-        min_value = float(np.min(finite_values))
-        max_value = float(np.max(finite_values))
+        if np.issubdtype(array.dtype, np.integer):
+            # Integer pixels (raw frames are uint16) are always finite: no mask copy.
+            min_value, max_value = float(array.min()), float(array.max())
+        else:
+            finite_values = array[np.isfinite(array)]
+            if finite_values.size == 0:
+                return False
+            min_value = float(np.min(finite_values))
+            max_value = float(np.max(finite_values))
         return min_value == max_value and min_value in PLACEHOLDER_VALUES
  
     def _skipped_rule_result(
@@ -682,7 +984,7 @@ class QAEngine:
             key = (region_name, metric_name)
             if key not in entry.metrics:  # not precomputed: measure it now
                 entry.metrics[key] = self._measure(entry.data, region_name, metric_name,
-                                                   extension, cache)
+                                                   extension, cache, entry)
             measured_value = entry.metrics[key]
             if isinstance(measured_value, QAEngineError):
                 raise measured_value
@@ -761,10 +1063,55 @@ class QAEngine:
 
     @staticmethod
     def _compute_metric(region_data: Any, metric: dict[str, Any],
-                        exptime: float | None = None,
+                        exptime: float | None = None, signal: float | None = None,
+                        profiles: tuple[Any, Any] | None = None,
                         histograms: dict[str, Any] | None = None,
                         region_name: str | None = None) -> float:
+        """Evaluate ``metric`` on ``region_data``. ``exptime`` is required by the
+        gradient-rate metric, ``signal`` (ADU above the edge stripe, see
+        ``_resolve_signal``) by the normalised structure and smear metrics, and
+        ``profiles`` (the ``line_profiles`` of the region along the metric's axis)
+        lets the profile metrics share one sort; when it is None the profiles
+        are computed here. ``histograms`` / ``region_name`` let the 16-bit integer
+        kernels share one value histogram per region."""
         raw = np.asarray(region_data)
+        metric_type = metric["type"]
+
+        if metric_type in _PROFILE_TYPES:
+            # Banding metric: std of the per-row (or per-column) TRIMMED means.
+            # Whole-row/column offsets, bars and glow gradients move the profile;
+            # isolated hot pixels, hot-column fragments and cosmic rays do not
+            # (a plain mean profile let a 20-pixel saturated cluster FAIL a bias;
+            # a median profile missed real bars confined to part of a column).
+            # The *_norm variants divide by the lamp signal so a bright 1 s arc
+            # and a faint 0.07 s arc give the same number for the same pattern.
+            # vertical_smear is the std of the per-column MEDIANS over the signal:
+            # curved arc lines leave the column medians at the background, a
+            # vertical halo lifts them (see SMEAR_TYPES). The median profile is
+            # smoothed with a running median first so a vertical line, which is
+            # only a few columns wide, drops out while a halo survives.
+            if raw.size == 0 or (raw.dtype.kind not in "iub" and not np.isfinite(raw).any()):
+                raise QAEngineError("metric cannot be computed because the selected "
+                                    "region contains no finite pixels")
+            is_smear = metric_type in SMEAR_TYPES
+            if profiles is None or (is_smear and profiles[1] is None):
+                profiles = line_profiles(raw, _profile_axis(metric_type), median=is_smear)
+            trimmed, median = profiles
+            if is_smear:
+                profile = running_median(median, int(metric.get("smooth_columns",
+                                                                 DEFAULT_SMEAR_SMOOTH)))
+            else:
+                profile = trimmed
+            profile = profile[np.isfinite(profile)]
+            if profile.size == 0:
+                raise QAEngineError("structure metric has no finite rows/columns")
+            structure = float(np.nanstd(profile))
+            if metric_type in STRUCTURE_NORM_TYPES or is_smear:
+                if signal is None or not np.isfinite(signal) or signal <= 0:
+                    raise QAEngineError(f"{metric_type} requires a positive signal")
+                return structure / float(signal)
+            return structure
+
         if raw.size and raw.dtype.kind in "iu" and raw.dtype.itemsize <= 2:
             # Raw frames are 16-bit integers: nothing to mask, and medians, MADs and
             # threshold counts come exactly from a value histogram instead of
@@ -778,8 +1125,6 @@ class QAEngine:
         if finite_values.size == 0:
             raise QAEngineError("metric cannot be computed because the selected "
                                 "region contains no finite pixels")
- 
-        metric_type = metric["type"]
 
         if metric_type == "background_gradient_rate":
             # Camera-warming signal. A warming detector grows a dark-current glow --
@@ -833,20 +1178,7 @@ class QAEngine:
         
         if metric_type == "count_above":
             return float(np.count_nonzero(finite_values > metric["threshold"]))
-        
-        if metric_type in ("row_structure", "column_structure"):
-            # Banding metric: std of the per-row (or per-column) TRIMMED means.
-            # Whole-row/column offsets, bars and glow gradients move the profile;
-            # isolated hot pixels, hot-column fragments and cosmic rays do not
-            # (a plain mean profile let a 20-pixel saturated cluster FAIL a bias;
-            # a median profile missed real bars confined to part of a column).
-            axis = -1 if metric_type == "row_structure" else -2  # collapse cols / rows
-            profile = trimmed_mean_profile(values, axis)
-            profile = profile[np.isfinite(profile)]
-            if profile.size == 0:
-                raise QAEngineError("structure metric has no finite rows/columns")
-            return float(np.nanstd(profile))
-        
+
         raise QAEngineError(f"unsupported metric type {metric_type!r}")
  
     def _resolve_rule_limits(
@@ -1021,13 +1353,10 @@ def _integer_metric(values: Any, metric: dict[str, Any], exptime: float | None,
     if metric_type == "max":
         return float(np.max(values))
 
-    if metric_type in ("row_structure", "column_structure"):
-        axis = -1 if metric_type == "row_structure" else -2  # collapse cols / rows
-        profile = trimmed_mean_profile(values, axis)
-        profile = profile[np.isfinite(profile)]
-        if profile.size == 0:
-            raise QAEngineError("structure metric has no finite rows/columns")
-        return float(np.nanstd(profile))
+    if metric_type == "mean":
+        # float64 accumulation of integers below 2**53 is exact in any order, so
+        # this equals the float path without its two float64 / mask copies.
+        return float(np.mean(values, dtype=np.float64))
 
     if metric_type == "background_gradient_rate":
         if values.ndim < 2:
@@ -1045,22 +1374,42 @@ def _integer_metric(values: Any, metric: dict[str, Any], exptime: float | None,
     return None
 
 
-def trimmed_mean_profile(values: Any, axis: int, trim: float = STRUCTURE_TRIM_FRACTION) -> Any:
-    """Mean along ``axis`` after dropping the lowest/highest ``trim`` fraction of each line.
+def integer_median(values: Any) -> float:
+    """Exact ``np.median`` of a (16-bit) integer array via its value histogram."""
+    return IntegerHistogram(values).median()
 
-    At least one pixel is trimmed from each end so the metric is defined for short
-    test frames; NaNs sort to the top end and are trimmed or ignored by nanmean.
 
-    Uses a two-pivot ``np.partition`` instead of a full sort: once the k-th and
-    (n-k-1)-th order statistics are in place, everything between them is exactly
-    the untrimmed set, so the mean is the same as the sorted version at a fraction
-    of the cost. Integer input is partitioned natively (its mean is accumulated in
-    float64 either way); float input is promoted to float64 as before. A 2-D
-    column profile is taken on a contiguous transpose, which is much faster than
-    partitioning along a strided axis.
+def integer_mad(values: Any) -> float:
+    """Exact ``np.median(np.abs(x - np.median(x)))`` of a (16-bit) integer array."""
+    return IntegerHistogram(values).mad()
+
+
+def line_profiles(values: Any, axis: int, trim: float = STRUCTURE_TRIM_FRACTION,
+                  median: bool = True) -> tuple[Any, Any]:
+    """``(trimmed_mean, median)`` of every line along ``axis`` from ONE sort or partition.
+
+    The trimmed mean drops the lowest/highest ``trim`` fraction of each line (at
+    least one pixel from each end so the metric is defined for short test frames).
+    The median is the middle element (mean of the two middle elements for an even
+    length), identical to ``np.median`` along the axis; with ``median=False`` it is
+    not computed and returned as None.
+
+    Integer input (raw frames are uint16) is sorted natively: numpy's 16-bit sort
+    is faster than even a two-pivot ``np.partition`` on these frames (8-17 ms
+    against 20-32 ms per 4-Mpix detector and axis, numpy 2.2), and one sort yields both
+    the trimmed mean and the median. Its mean is accumulated in float64, which is
+    exact for integers, so the profile does not depend on the pixel order. Float
+    input is promoted to float64 and uses a multi-pivot ``np.partition``: once the
+    k-th and (n-k-1)-th order statistics are in place, everything between them is
+    exactly the untrimmed set; the middle one or two ranks are added as pivots when
+    the median is wanted. NaNs sort to the top end and are trimmed or ignored by
+    nanmean; when a NaN is present the median is taken with ``np.nanmedian``. A
+    2-D column profile is taken on a contiguous transpose, which is much faster
+    than sorting or partitioning along a strided axis.
     """
     array = np.asarray(values)
-    if array.dtype.kind not in "iu":
+    integer = array.dtype.kind in "iu"
+    if not integer:
         array = np.asarray(array, dtype=float)
     axis = axis % array.ndim
     if array.ndim == 2 and axis == 0:
@@ -1068,12 +1417,63 @@ def trimmed_mean_profile(values: Any, axis: int, trim: float = STRUCTURE_TRIM_FR
         axis = 1
     n = array.shape[axis]
     k = max(1, int(n * trim))
-    if n <= 2 * k:   # nothing left after trimming: every line is undefined
-        return np.full(array.shape[:axis] + array.shape[axis + 1:], np.nan)
-    index = [slice(None)] * array.ndim
-    index[axis] = slice(k, n - k)
-    partitioned = np.partition(array, (k, n - k - 1), axis=axis)
-    return np.nanmean(partitioned[tuple(index)], axis=axis)
+    trimmable = n > 2 * k      # otherwise nothing is left after trimming
+    has_nan = not integer and bool(np.isnan(array).any())
+    middle = [n // 2] if n % 2 else [n // 2 - 1, n // 2]
+    if integer:
+        partitioned = np.sort(array, axis=axis)
+    else:
+        kth: set[int] = {k, n - k - 1} if trimmable else set()
+        if median and not has_nan and n > 0:
+            kth.update(middle)
+        partitioned = np.partition(array, sorted(kth), axis=axis) if kth else array
+    line_shape = array.shape[:axis] + array.shape[axis + 1:]
+
+    if trimmable:
+        index = [slice(None)] * array.ndim
+        index[axis] = slice(k, n - k)
+        trimmed = np.nanmean(partitioned[tuple(index)], axis=axis)
+    else:      # every line is undefined
+        trimmed = np.full(line_shape, np.nan)
+
+    if not median:
+        return trimmed, None
+    if has_nan or n == 0:
+        with np.errstate(all="ignore"):
+            return trimmed, np.nanmedian(array, axis=axis)
+    upper = np.take(partitioned, middle[-1], axis=axis).astype(np.float64)
+    if n % 2 == 0:
+        upper = (upper + np.take(partitioned, middle[0], axis=axis)) / 2.0
+    return trimmed, upper
+
+
+def trimmed_mean_profile(values: Any, axis: int, trim: float = STRUCTURE_TRIM_FRACTION) -> Any:
+    """Mean along ``axis`` after dropping the lowest/highest ``trim`` fraction of each line
+    (the first element of ``line_profiles``, without the median pivots)."""
+    return line_profiles(values, axis, trim, median=False)[0]
+
+
+def running_median(profile: Any, width: int) -> Any:
+    """Running median of a 1-D profile over ``width`` samples (edge-padded, so the
+    output has the input's length). ``width`` is made odd and clipped to the
+    profile length; ``width <= 1`` returns the profile unchanged (as float64).
+    Used by the vertical-smear metric to drop features narrower than ~width/2."""
+    values = np.asarray(profile, dtype=np.float64).ravel()
+    n = values.size
+    width = int(width)
+    if width <= 1 or n <= 1:
+        return values
+    width = min(width, n if n % 2 else n - 1)
+    if width % 2 == 0:
+        width -= 1
+    if width <= 1:
+        return values
+    half = width // 2
+    padded = np.pad(values, half, mode="edge")
+    windows = np.lib.stride_tricks.sliding_window_view(padded, width)
+    return np.median(windows, axis=-1)
+
+
 
 
 _YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
@@ -1137,20 +1537,22 @@ def collect_fits_files(directory: Path) -> list[Path]:
  
  
 def run_single_file(fits_file: Path, config_path: Path, no_validate: bool = False,
+                    cameras_down: list[str] | None = None,
                     workers: int | None = None) -> dict[str, Any]:
     config = load_yaml(config_path)
     if not no_validate:
         validate_config(config, config_path)
-    engine = QAEngine(config)
+    engine = QAEngine(config, cameras_down=cameras_down)
     return engine.run(fits_file, workers=workers)
- 
- 
-def _batch_worker(args: tuple[str, str, bool, int]) -> dict[str, Any]:
-    fits_file_s, config_path_s, no_validate, workers = args
+
+
+def _batch_worker(args: tuple[str, str, bool, list[str] | None, int]) -> dict[str, Any]:
+    fits_file_s, config_path_s, no_validate, cameras_down, workers = args
     fits_file = Path(fits_file_s)
     config_path = Path(config_path_s)
     try:
-        report = run_single_file(fits_file, config_path, no_validate=no_validate, workers=workers)
+        report = run_single_file(fits_file, config_path, no_validate=no_validate,
+                                 cameras_down=cameras_down, workers=workers)
         return {
             "fits_file": str(fits_file),
             "status": "OK",
@@ -1167,7 +1569,7 @@ def _batch_worker(args: tuple[str, str, bool, int]) -> dict[str, Any]:
  
  
 def run_batch(input_dir: Path, config_path: Path, jobs: int, no_validate: bool = False,
-              threads: int = 1) -> dict[str, Any]:
+              cameras_down: list[str] | None = None, threads: int = 1) -> dict[str, Any]:
     """Batch mode runs one process per file (``jobs``), each measuring its frame
     with ``threads`` threads (default 1: the files already run in parallel)."""
     files = collect_fits_files(input_dir)
@@ -1179,8 +1581,8 @@ def run_batch(input_dir: Path, config_path: Path, jobs: int, no_validate: bool =
         config = load_yaml(config_path)
         validate_config(config, config_path)
  
-    worker_args = [(str(path), str(config_path), no_validate, max(1, int(threads)))
-                   for path in files]
+    worker_args = [(str(path), str(config_path), no_validate, cameras_down,
+                    max(1, int(threads))) for path in files]
     max_workers = max(1, int(jobs))
  
     results: list[dict[str, Any]] = []
@@ -1254,7 +1656,13 @@ def main() -> int:
                         help="Skip config validation before running")
     parser.add_argument("--summary-only", action="store_true",
                         help="Print quick human-readable summary")
+    parser.add_argument("--cameras-down", default=None, metavar="NAMES",
+                        help="comma-separated detector names allowed to be missing or "
+                             "placeholder (e.g. 1.A.Blue,4.A.Blue; 'none' for none); "
+                             f"overrides configs/{CAMERA_STATUS_NAME} and the "
+                             f"{CAMERAS_DOWN_ENV} environment variable")
     args = parser.parse_args()
+    cameras_down = resolve_cameras_down(args.cameras_down)[0]
 
     # A bare config name (e.g. "qa_config_cal.yaml", no directory part) resolves
     # to the shipped copy; any path with a directory component is used as given,
@@ -1275,6 +1683,7 @@ def main() -> int:
                     input_path,
                     args.config,
                     no_validate=args.no_validate,
+                    cameras_down=cameras_down,
                     workers=args.threads,
                 )
                 verdict = report["overall_verdict"]
@@ -1309,6 +1718,7 @@ def main() -> int:
                 args.config,
                 jobs=args.jobs,
                 no_validate=args.no_validate,
+                cameras_down=cameras_down,
                 threads=args.threads or 1,
             )
  

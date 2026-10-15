@@ -265,6 +265,84 @@ def test_shipped_illuminated_structure_severities(cal_cfg):
         assert rules_of(cal_cfg, rule_set)["saturation_fraction"]["severity"] == "WARN"
 
 
+def test_shipped_arc_structure_is_signal_normalised(cal_cfg):
+    """ThAr structure is structure / lamp signal (exposure-independent); every other
+    set keeps the absolute metric. Caps are dimensionless and mode-independent."""
+    arc = rules_of(cal_cfg, "ARC_THAR")
+    assert arc["row_structure"]["metric"] == "row_banding_norm"
+    assert arc["column_structure"]["metric"] == "column_banding_norm"
+    for rule_set in ("BIAS", "DARK", "LDLS_FLAT", "SKY_FLAT"):
+        assert rules_of(cal_cfg, rule_set)["row_structure"]["metric"] == "row_banding"
+        assert rules_of(cal_cfg, rule_set)["column_structure"]["metric"] == "column_banding"
+    for name, mtype in (("row_banding_norm", "row_structure_norm"),
+                        ("column_banding_norm", "column_structure_norm")):
+        metric = cal_cfg["metrics"][name]
+        assert metric["type"] == mtype
+        assert metric["background_region"] == "bottom_stripe"
+        assert metric["min_signal"] == 2.0
+    table = cal_cfg["lookup_tables"]["struct_ARC_THAR"]
+    assert len(table) == 24
+    for detector, modes in table.items():
+        assert set(modes) == {"FAST", "SLOW"}, detector
+        assert modes["FAST"] == modes["SLOW"], detector
+        assert 0.0 < modes["FAST"]["col_max"] < 3.0, detector
+        assert "row_fail_max" not in modes["FAST"]
+        if detector == "3.A.Blue":
+            # 3.A.Blue carries ~1415 ADU of fixed row banding on every arc, independent
+            # of the lamp, so its normalised row cap is open (the column rule still works)
+            assert modes["FAST"]["row_max"] > 10.0
+        else:
+            assert 0.0 < modes["FAST"]["row_max"] < 1.0, detector
+
+
+def test_shipped_arc_vertical_smear_rule(cal_cfg):
+    """ThAr arcs FAIL on vertical halo / smear: std of the per-column median profile
+    over the lamp signal, per-detector caps pooled over readout mode. Normal arcs sit
+    at ~0.03 on a red camera and 0.15-0.37 on green/blue; the 2026-07-10 odd arcs at
+    >1 on the reds."""
+    arc = rules_of(cal_cfg, "ARC_THAR")
+    rule = arc["vertical_smear"]
+    assert rule["severity"] == "FAIL" and rule["metric"] == "vertical_smear"
+    assert rule["region"] == "full_frame" and rule["per_extension"] is True
+    assert rule["expected_from_lookup"]["table"] == "smear_ARC_THAR"
+    for rule_set in ("BIAS", "DARK", "LDLS_FLAT", "SKY_FLAT"):
+        assert "vertical_smear" not in rules_of(cal_cfg, rule_set)
+    metric = cal_cfg["metrics"]["vertical_smear"]
+    assert metric["type"] == "vertical_smear"
+    assert metric["background_region"] == "bottom_stripe" and metric["min_signal"] == 20.0
+    assert metric["smooth_columns"] == 15     # narrow vertical lines are not smear
+    table = cal_cfg["lookup_tables"]["smear_ARC_THAR"]
+    assert len(table) == 24
+    for detector, modes in table.items():
+        assert set(modes) == {"FAST", "SLOW"} and modes["FAST"] == modes["SLOW"], detector
+        cap = modes["FAST"]["max"]
+        if detector.endswith("Red"):
+            assert 0.03 < cap < 0.15, detector
+        else:
+            assert 0.15 < cap < 1.0, detector
+
+
+def test_shipped_bias_shutter_is_two_tier(cal_cfg, sci_cfg):
+    """A bias requests 0.001 s but the shutter lag leaves SEXPTIME at a few ms and
+    occasionally a few tenths of a second. Lag beyond the baseline tolerance is WARN
+    (the frame is still a usable bias); only an actual SEXPTIME above 0.5 s FAILs.
+    Every other frame type keeps the single FAIL consistency rule."""
+    bias = rules_of(cal_cfg, "BIAS")
+    lag = bias["shutter_exptime_consistency"]
+    assert lag["severity"] == "WARN"
+    assert lag["header_check"]["op"] == "abs_or_rel_diff"
+    assert lag["header_check"]["abs_tol"] == pytest.approx(0.214)
+    gross = bias["shutter_exptime_gross"]
+    assert gross["severity"] == "FAIL"
+    assert gross["header_check"] == {"op": "range", "source": "SEXPTIME", "limits": {"max": 0.5}}
+    assert "per_extension" not in gross
+    for cfg, rule_set in ((cal_cfg, "DARK"), (cal_cfg, "LDLS_FLAT"), (cal_cfg, "SKY_FLAT"),
+                          (cal_cfg, "ARC_THAR"), (sci_cfg, "SCIENCE")):
+        rules = rules_of(cfg, rule_set)
+        assert rules["shutter_exptime_consistency"]["severity"] == "FAIL", rule_set
+        assert "shutter_exptime_gross" not in rules, rule_set
+
+
 def test_every_shipped_rule_set_has_edge_saturated_fail(cal_cfg, sci_cfg):
     for cfg in (cal_cfg, sci_cfg):
         for rule_set in cfg["rule_sets"]:

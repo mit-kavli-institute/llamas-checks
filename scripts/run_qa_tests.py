@@ -62,7 +62,8 @@ CASES = [
     ("Commissioning sci (4A.red banding)", "PASS/WARN", "commissioning", "LLAMAS_2026-07-11_05-05-22.4_SCI22_mef.fits", SCI),
     ("WARM cal ARC (shutter)",   "FAIL", "warm", "LLAMAS_2026-05-06_05-50-23.7_CAL0_mef.fits",                     CAL),
     ("WARM cal BIAS (shutter ok)", "PASS", "warm", "LLAMAS_2026-05-06_05-56-25.8_CAL0_mef.fits",                   CAL),
-    ("WARM cal BIAS (shutter)",  "FAIL", "warm", "LLAMAS_2026-05-06_05-56-30.7_CAL0_mef.fits",                     CAL),
+    # bias shutter lag (0.352 s) is WARN; only SEXPTIME > 0.5 s FAILs a bias
+    ("WARM cal BIAS (shutter lag)", "WARN", "warm", "LLAMAS_2026-05-06_05-56-30.7_CAL0_mef.fits",                  CAL),
     # 2026-09 severity revision: benign biases/darks must not FAIL, railed flats must.
     ("Sept FAST bias (4A.red banding)",   "PASS/WARN", "sept06", "LLAMAS_2026-09-06_19-14-52.1_CAL22_mef.fits", CAL),
     ("Sept FAST bias (hot-pixel cluster)", "PASS/WARN", "sept06", "LLAMAS_2026-09-06_20-33-17.7_CAL22_mef.fits", CAL),

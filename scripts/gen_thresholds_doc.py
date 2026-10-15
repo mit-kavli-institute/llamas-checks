@@ -49,21 +49,35 @@ def modes_in(lookup):
     return modes
 
 
-def cal_type_section(name, prodcatg, has_level, detectors, tables, derived):
+def cal_type_section(name, prodcatg, has_level, detectors, tables, derived, normalised=False):
     out = [f"## {name} (`{prodcatg}`)", ""]
+    if normalised:
+        out += ["Row / column structure on this type is **normalised by the lamp signal** "
+                "(structure ÷ (full-frame mean − bottom-stripe median), dimensionless) so the cap "
+                "does not depend on the exposure time; the sample is pooled over both readout modes, "
+                "so the FAST and SLOW caps are identical. Rules SKIP when the signal is below 2 ADU. "
+                "**Vertical smear** is the std of the per-column median profile, after a 15-column "
+                "running median that removes narrow vertical lines, ÷ the same signal (a vertical halo "
+                "around the lines lifts whole-column medians over tens of columns; curved or narrow "
+                "vertical lines do not), FAIL above the cap, SKIPPED below 20 ADU of signal.", ""]
     edge, struct, sat = tables[f"edge_bg_{name}"], tables[f"struct_{name}"], tables[f"sat_{name}"]
+    smear = tables.get(f"smear_{name}") if normalised else None
     level = tables.get(f"level_{name}") if has_level else None
     n_files = {}
     for mode, per_det in derived["per_detector"][prodcatg].items():
         for det, entry in per_det.items():
-            n_files[(det, mode)] = entry.get("n_files")
+            n, nv = entry.get("n_files"), entry.get("n_vetted")
+            n_files[(det, mode)] = f"{n} / {nv}" if nv is not None else n
     for mode in modes_in(edge):
-        header = ["detector", "n baseline", "edge-bg min", "edge-bg max"]
+        header = ["detector", "n baseline (level / vetted)", "edge-bg min", "edge-bg max"]
         if level:
             header += ["level min", "level max", "rms (robust) max"]
-        header += ["row max", "col max"]
+        header += (["row max (÷ signal)", "col max (÷ signal)"] if normalised
+                   else ["row max", "col max"])
         if has_level:
             header += ["row FAIL max (4x)", "col FAIL max (4x)"]
+        if smear is not None:
+            header += ["vertical smear max"]
         header += ["sat frac max"]
         rows = []
         for det in detectors:
@@ -78,6 +92,9 @@ def cal_type_section(name, prodcatg, has_level, detectors, tables, derived):
             row += [s and s["row_max"], s and s["col_max"]]
             if has_level:
                 row += [s and s.get("row_fail_max"), s and s.get("col_fail_max")]
+            if smear is not None:
+                sm = smear.get(det, {}).get(mode)
+                row += [sm and sm["max"]]
             row += [f and f["frac_max"]]
             rows.append(row)
         out += [f"### {name} — readout mode {mode}", "", table(header, rows), ""]
@@ -106,11 +123,22 @@ def temperature_section(detectors, temp_table, derived):
     ]
 
 
-def shutter_section(derived):
-    header = ["frame type", "abs tolerance (s)", "rel tolerance", "largest \\|SEXPTIME − REXPTIME\\| seen in baselines (s)"]
-    rows = [[k, v["abs_tol"], v["rel_tol"], v.get("abs_delta_max")] for k, v in sorted(derived["shutter"].items())]
-    return ["## Shutter consistency (`shutter_exptime_consistency`, FAIL)", "",
-            "Passes when \\|SEXPTIME − REXPTIME\\| is within EITHER the absolute or the relative tolerance.", "",
+def shutter_section(derived, cal):
+    header = ["frame type", "severity", "abs tolerance (s)", "rel tolerance",
+              "largest \\|SEXPTIME − REXPTIME\\| seen in baselines (s)"]
+    sev = {"CAL.R-BIA": "BIAS", "CAL.R-DRK": "DARK", "CAL.R-FLT": "LDLS_FLAT",
+           "CAL.R-SKY": "SKY_FLAT", "CAL.R-ARC": "ARC_THAR"}
+    rows = []
+    for k, v in sorted(derived["shutter"].items()):
+        rules = {r["name"]: r for r in cal["rule_sets"][sev[k]]["rules"]} if k in sev else {}
+        severity = rules.get("shutter_exptime_consistency", {}).get("severity", "FAIL")
+        rows.append([k, severity, v["abs_tol"], v["rel_tol"], v.get("abs_delta_max")])
+    gross = {r["name"]: r for r in cal["rule_sets"]["BIAS"]["rules"]}["shutter_exptime_gross"]
+    bias_fail = fmt(gross["header_check"]["limits"]["max"])
+    return ["## Shutter consistency (`shutter_exptime_consistency`)", "",
+            "Passes when \\|SEXPTIME − REXPTIME\\| is within EITHER the absolute or the relative tolerance. "
+            "FAIL on every frame type except BIAS, where shutter lag beyond the tolerance is WARN (the frame "
+            f"is still a usable bias) and `shutter_exptime_gross` FAILs when the actual SEXPTIME exceeds {bias_fail} s.", "",
             table(header, rows), ""]
 
 
@@ -148,6 +176,9 @@ def main() -> int:
     detectors = [e["name"] for e in cal["extensions"]]
     tables = cal["lookup_tables"]
     meta = derived["meta"]
+    level_only = ", ".join(meta.get("level_only_epochs", [])) or "none"
+    excluded = ", ".join(f"{d} {pc}" for d, pc in meta.get("excluded_records", [])) or "none"
+    frozen = ", ".join(f"{d} {m}" for d, m in meta.get("legacy_band_detectors", [])) or "none"
 
     doc = [
         "# LLAMAS QA thresholds — per-detector tables",
@@ -157,24 +188,36 @@ def main() -> int:
         "> re-run the script after `gen_configs.py`.",
         "",
         f"Baseline epochs: {', '.join(meta['epochs'])}; {meta['n_normal_records']} normal detector-frame records; "
-        f"held out: {meta['excluded_odd']}. Method: {meta['robustness']}. Regions: {meta['region_convention']}.",
+        f"held out: {meta['excluded_odd']}. Level-only epochs (edge/level bands and tracking only, not "
+        f"structure / rms / saturation / smear caps, shutter or temperature): {level_only}; "
+        f"{meta.get('n_vetted_records', meta['n_normal_records'])} vetted records feed the caps. "
+        f"Excluded entirely: {excluded}. Frozen at the legacy band (level-only records held out): {frozen}. "
+        f"Method: {meta['robustness']}. Regions: {meta['region_convention']}. "
+        "The n column gives the level-band sample / the vetted sample; a detector with 0 vetted records "
+        "takes its structure, rms, saturation and smear caps from the median of the other cameras of its "
+        "colour.",
         "",
         "Units: ADU for levels, RMS and structure metrics; fraction of pixels for saturation; °C for temperature; "
         "seconds for shutter tolerances. Level and edge-background limits are a min–max band (WARN outside); "
         "RMS (1.4826 x MAD), structure (std of the per-row / per-column medians) and saturation are one-sided "
         "caps. On BIAS/DARK the row/col caps are WARN and the 4x \"FAIL max\" columns are the `*_gross` FAIL "
-        "tier; on LDLS/ARC the structure cap is FAIL, on SKY it is WARN. Static FAIL rules on every set: "
+        "tier; on LDLS/ARC the structure cap is FAIL, on SKY it is WARN (on ARC the structure is divided by "
+        "the lamp signal, see that section). Static FAIL rules on every set: "
         "`edge_saturated` (bottom-stripe median > 63000 ADU) and, on BIAS/DARK, `saturation_gross` "
         "(> 1 % of pixels above 63000 ADU). \"—\" means that readout mode is not modelled for "
         "that detector (the rule is SKIPPED, never failed). A missing camera in a frame is a placeholder "
-        "extension and is skipped.",
+        "extension: its pixel rules are skipped and the frame FAILs `camera_present` for it unless the "
+        "camera is listed in `configs/camera_status.yaml`.",
         "",
     ]
-    doc += shutter_section(derived)
+    doc += shutter_section(derived, cal)
     doc += temperature_section(detectors, tables["temp"], derived)
     doc += science_section(sci)
     for name, prodcatg, has_level in CAL_TYPES:
-        doc += cal_type_section(name, prodcatg, has_level, detectors, tables, derived)
+        rules = {r["name"]: r for r in cal["rule_sets"][name]["rules"]}
+        normalised = rules["row_structure"]["metric"].endswith("_norm")
+        doc += cal_type_section(name, prodcatg, has_level, detectors, tables, derived,
+                                normalised=normalised)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text("\n".join(doc).rstrip() + "\n", encoding="utf-8")

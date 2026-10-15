@@ -76,9 +76,12 @@ for WARN/FAIL). One deliberate exception: a **system error still prints one line
 HDU is absent, in detector order), `identity_mismatches` (configured extensions whose header
 `BENCH`/`SIDE`/`COLOR` disagree with the position they occupy, as `{extension, hdu_index,
 header_identity}`) and `placeholder_extensions` (extensions present but constant-valued, taken from
-the engine results with status `PLACEHOLDER`; an empty list when no engine report was produced). It is
-present on every return path and is informational only: the structure block **never changes
-`status` or the exit code**. With `-v` it is printed as one `structure: …` line on stderr.
+the engine results with status `PLACEHOLDER`; an empty list when no engine report was produced), plus
+`cameras_down` / `cameras_down_source` (the allow-list of cameras permitted to be down and where it
+was read from). It is present on every return path and is informational only: the structure block
+**never changes `status` or the exit code**; the engine's per-camera `camera_present` results do
+(FAIL for an absent or placeholder camera not listed as down). With `-v` it is printed as one
+`structure: …` line on stderr.
 
 ## Frame types and selectors
 
@@ -108,8 +111,11 @@ are the per-detector bias/background reference on any frame type.
 | `top_stripe` | y[2020:2046], x[100:1948] |
 
 Missing cameras are constant-valued placeholder extensions (finite pixels with `nanmin == nanmax`
-at exactly 1, as in real frames, or exactly 0, as written by the pipeline validator) and are
-**skipped** (never failed). A constant frame at any other value (a railed detector at the ADC
+at exactly 1, as in real frames, or exactly 0, as written by the pipeline validator) or absent
+HDUs. Their pixel rules are **skipped**, and the per-camera `camera_present` check **fails** the
+frame for each such camera unless it is listed in `configs/camera_status.yaml` (`cameras_down:`,
+hand-edited when a camera is out for maintenance; overridable with `--cameras-down` or
+`LLAMAS_CHECKS_CAMERAS_DOWN`). A constant frame at any other value (a railed detector at the ADC
 ceiling, a dead readout at a pedestal) is *not* a placeholder and is evaluated normally.
 Off-mode frames (a readout mode not in a lookup table) **skip just that rule**, never crash
 the file.
@@ -121,7 +127,8 @@ off-mode lookups → SKIPPED. Background/level/RMS are **WARN** (drift & warm mo
 doc's requirement is to *track* bias level and its drift; **row/column structure is `FAIL` on
 every cal type** (bias, dark, LDLS flat, sky flat, arc) — odd/anomalous structure must alert the
 observer. All background/structure/saturation limits are per-detector (`extension.name`) ×
-`readout_mode`.
+`readout_mode`, except the arc structure caps, which are normalised by lamp signal and shared by
+both readout modes (see the ARC note below).
 
 ### BIAS (`CAL.R-BIA`)
 | Rule | Region / source | Metric | Threshold | Sev | Flags |
@@ -150,10 +157,41 @@ Row/column structure is **FAIL** even though these frames carry real fibre/line 
 because the per-detector caps are heavy-tail (≈1.5× the worst normal frame): every normal
 illuminated frame sits at ≤0.67× its cap, so only a **gross odd-structure anomaly** trips it.
 Validated across **115 normal illuminated frames** (39 baseline arcs + 16 normal 2026-07-10
-commissioning arcs + 36 LDLS + 24 twilight) → **0 breaches**; the anomalous 2026-07-10 arcs sit
+commissioning arcs + 36 LDLS + 24 twilight) → **0 breaches**; the anomalous 2026-07-10 arcs sat
 at **1.8–3.0× cap on all 22 detectors** → FAIL. Saturation is deliberately **not** the
 discriminator here: normal red ThAr arcs already saturate (p99 ≈ 65535), so only structure
 cleanly separates the defect.
+
+**ThAr arcs, 2026-10 revision.** The absolute arc metric scales with the lamp signal, and every
+FAST baseline arc was 0.07–0.4 s while every SLOW one was 1 s, so the FAST caps encoded exposure
+time: two good 1 s FAST arcs of 2026-10-07 failed 34 structure checks each while 1 s SLOW arcs with
+the same values passed. The ARC_THAR rules now use `row_structure_norm` / `column_structure_norm`
+= structure ÷ (full-frame mean − bottom-stripe median), caps from all 39 baseline arcs pooled over
+readout mode (ratio spread on a red row 0.06–0.16, cap 0.23; on a green row 0.23–0.30, cap 0.44).
+The 1 s FAST arcs sit at ≤ 0.7× cap; the 2026-07-10 odd arc `20-22-43.7` (streaked red lines) still
+FAILs at 1.3–1.75× cap on five red rows, while its over-bright successor `20-22-58.8` passes the
+structure rules (0.85× cap). The rule SKIPs on a detector with < 2 ADU of signal. 3.A.Blue's fixed
+~1415 ADU row banding is lamp-independent, so its normalised row cap is open.
+
+**Vertical smear (`vertical_smear`, ARC_THAR, FAIL).** Saturated lines are normal on an arc; the
+fault on the 2026-07-10 frames is the vertical halo around the lines. A curved narrow line occupies
+a small fraction of each column, so the per-column *median* stays at the background, while a halo
+fills whole columns and lifts it. A line that happens to run straight down a column also lifts
+that column's median, and that is normal (baseline arc `Arcs/LLAMAS_2026-05-03_00-08-43.3` has a
+saturated 1-column line at x = 800 on 2.B.Red; the stuck-shutter 6.7 s arc
+`cals_test_run/2026-10-07_18-23-49.1` has bloomed 3–4-column lines on its reds), so the column-median
+profile is first smoothed with a **15-column running median**, which removes anything narrower than
+~8 columns and keeps the halos (27–150 columns wide on the 2026-07-10 frames). The metric is
+std(running median of the per-column medians) ÷ lamp signal, from the same sorted array as the
+column structure (no extra pixel pass). Over 52 normal red-camera records (35 baseline, 9
+commissioning and 5 test-run arcs; ≥ 20 ADU) a red camera measures 0.024–0.067 (median 0.03) at any
+exposure, green 0.11–0.29, blue 0.23–0.36; the narrow-line cases measure 0.038–0.054 (normal); the
+2026-07-10 arcs measure 1.1–1.4 (43.7, every red, plus 0.34–0.65 on most greens/blues) and 0.10–0.96
+(58.8, every red), so both FAIL at 1.2–23 × cap. Caps are max(median + 8 σ, 1.5 × p95) per detector,
+pooled over readout mode, so a single odd baseline record cannot open a camera's cap;
+`aggregate_thresholds.py` reports any baseline record above its cap (currently none). Below 20 ADU
+of signal the green/blue column medians are read-noise dominated (normal values drift up to 0.53),
+so the rule SKIPs there; the reds always have > 100 ADU.
 
 ### SCIENCE (`SCI.R-*`)
 | Rule | Source | Threshold | Sev |
@@ -264,19 +302,32 @@ never failed.
 ## Threshold provenance & tracking
 
 Derived from **153 baseline cal files** over **2026-04-07, 2026-05-02, 2026-06-30** (the
-known-bad June-4 odd dark held out for validation). Methodology (robust):
+known-bad June-4 odd dark held out for validation), plus **2026-10-14 as a level-only epoch**
+(22 biases, 12 arcs, 4 darks and 1 sky flat; its 12 saturated LDLS flats are excluded). The
+level-only epoch feeds the edge-background / level bands and the tracking CSV only; structure,
+rms, saturation and smear caps, shutter and temperature tolerances come from the three vetted
+epochs (3344 records; 918 level-only records added to the bands). Methodology (robust):
 - Per (type × mode × detector) samples are **MAD sigma-clipped** to reject anomalous baseline
   frames *before* deriving limits (so an outlier can't inflate its own cap).
-- Background/level bands are additive: `median ± max(6σ_robust, 15 ADU)` — an **absolute** ADU
-  floor, not a percentage.
-- Structure/RMS/saturation caps are robust one-sided: `max(median + 8σ_robust, 3×median,
+- Background/level bands are additive and span the **observed range over all healthy epochs**
+  plus a drift margin: `[min − h, max + h]`, `h = max(6σ_robust, 30 ADU)` (`DRIFT_MARGIN_ADU`).
+  Levels drifted 15–70 ADU between April–June and October while the within-night spread is 0–5
+  ADU, so the old `median ± max(6σ, 15 ADU)` band warned on healthy October biases.
+- **2.B.Green SLOW is frozen**: it was +36 ADU in October and is known-bad there, so its October
+  records are held out of every derivation (they appear only in the tracking CSV) and it keeps the
+  legacy band `median ± max(6σ, 15 ADU)` (BIAS level 615.5–645.5, edge 616.5–646.5 ADU).
+- 1.A.Blue and 4.A.Blue have their own bands from October (they were placeholders in every
+  earlier epoch); with no vetted record their structure, rms, saturation and smear caps are the
+  median of the other blue cameras.
+- Structure/RMS/saturation caps are heavy-tail one-sided: `max(1.5 × max, median + 8σ_robust,
   floor)`.
 - **CCD temperature is per camera**: each detector's own healthy median (within-camera
   sigma-clipped) plus a colour-aware warm margin (red +10/+16 °C, green/blue +8/+15 °C). Pooling
   all cameras would hide the warm-running detectors — 1A.red at −78 °C sits 12 °C above the −90 °C
   array median, so the legacy pooled threshold clipped it away as an "outlier."
-- Self-check: 2.7% of normal detector-frames breach their edge-background band (WARN-level
-  drift), 0 breach at FAIL severity.
+- Self-check: 0 normal detector-frames breach a range + margin edge-background band (by
+  construction); 5 records of the frozen 2.B.Green SLOW (2026-05-02 / 06-30 sky flats) sit outside
+  its legacy band, and all 18 held-out October 2.B.Green SLOW records breach it.
 
 Artifacts (`llamas_checks/baselines/`): `qa_thresholds_derived.json` (limits + observed stats)
 and `qa_tracking_baselines.csv` (per-epoch medians for **drift monitoring**); the reproducible
@@ -292,7 +343,7 @@ YAMLs are generated, so edit `scripts/gen_configs.py` (or the YAML) and re-valid
 | Check | Threshold | Severity | Notes |
 |---|---|---|---|
 | Saturation pixel value | **> 63000 ADU** | — | counted by `saturation_fraction` |
-| Shutter `\|SEXPTIME − REXPTIME\|` | abs **or** rel tol (passes within either) | FAIL (cal) / FAIL (sci) | rel_tol = **0.10** all types; abs_tol per type below |
+| Shutter `\|SEXPTIME − REXPTIME\|` | abs **or** rel tol (passes within either) | FAIL (cal, sci); **WARN on BIAS**, where `shutter_exptime_gross` FAILs at SEXPTIME > 0.5 s | rel_tol = **0.10** all types; abs_tol per type below |
 | — BIAS abs_tol | 0.214 s | | |
 | — DARK abs_tol | 0.238 s | | |
 | — ARC abs_tol | 0.328 s | | |
@@ -307,13 +358,14 @@ YAMLs are generated, so edit `scripts/gen_configs.py` (or the YAML) and re-valid
 
 | Check | Cap formula | Floor | Severity |
 |---|---|---|---|
-| `edge_background_level` / `frame_level_median` | additive band `median ± max(6σ, 15 ADU)` | 15 ADU | WARN |
-| `frame_noise_rms` | `max(median + 8σ, 3×median, 5.0)` | 5.0 ADU | WARN |
+| `edge_background_level` / `frame_level_median` | additive band `[min − h, max + h]` over all healthy epochs, `h = max(6σ, 30 ADU)`; 2.B.Green SLOW keeps `median ± max(6σ, 15 ADU)` | 30 ADU margin | WARN |
+| `frame_noise_rms` | heavy-tail `max(1.5 × max, median + 8σ, 5.0)` | 5.0 ADU | WARN |
 | `row_structure` / `column_structure` | heavy-tail `max(max×1.5, median + 8σ, 2.0)` | 2.0 | **FAIL (all cal types)** |
 | `saturation_fraction` | heavy-tail `max(max×1.5, median + 8σ, 0.0005)` | 5e-4 | FAIL (bias) / WARN (other cals) |
 | `ccd_temperature_warm` / `_hot` | per-camera `baseline_med + margin`; margin **WARN +8 / FAIL +15 °C**, **red +10 / +16**; keyed `extension.name` only (temperature is readout-mode independent) | — | WARN / FAIL |
 
-Derivation constants: `K_LEVEL 6`, `FLOOR_LEVEL 15 ADU`, `N_CAP 8σ`, `FLOOR_STRUCT 2.0`,
+Derivation constants: `K_LEVEL 6`, `DRIFT_MARGIN_ADU 30`, `FLOOR_LEVEL 15 ADU` (legacy band of
+the frozen 2.B.Green SLOW only), `N_CAP 8σ`, `FLOOR_STRUCT 2.0`,
 `FLOOR_RMS 5.0`, `FLOOR_SAT 0.0005`. Structure caps are **heavy-tail** (the detector's own
 unscreened max × 1.5, not sigma-clipped) so naturally-structured detectors (e.g. blue 3.A
 row-banding ≈1424) keep loose caps and don't false-fail. The **full per-detector cap values**
