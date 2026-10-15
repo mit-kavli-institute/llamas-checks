@@ -4,7 +4,7 @@
 > `qa_config_science.yaml` and `llamas_checks/baselines/qa_thresholds_derived.json`. Do not edit by hand;
 > re-run the script after `gen_configs.py`.
 
-Baseline epochs: 2026-04-07, 2026-05-02, 2026-06-30, 2026-10-14; 4262 normal detector-frame records; held out: 2026-06-04_20-36-33. Level-only epochs (edge/level bands and tracking only, not structure / rms / saturation / smear caps, shutter or temperature): 2026-10-14; 3344 vetted records feed the caps. Excluded entirely: 2026-10-14 CAL.R-FLT. Frozen at the legacy band (level-only records held out): 2.B.Green SLOW. Method: level/edge band = observed range over all healthy epochs +/- max(6sig,30ADU) (legacy median +/- max(6sig,15ADU) for 2.B.Green SLOW, whose 2026-10-14 records are held out); structure/rms/saturation caps max(1.5 x max, med+8sig, floor) from the vetted epochs only (level-only: 2026-10-14). Regions: edge stripes y[2:28]&[2020:2046] x[100:1948]; sat>63000. The n column gives the level-band sample / the vetted sample; a detector with 0 vetted records takes its structure, rms, saturation and smear caps from the median of the other cameras of its colour.
+Baseline epochs: 2026-04-07, 2026-05-02, 2026-06-30, 2026-10-14; 4280 normal detector-frame records; held out: 2026-06-04_20-36-33. Level-only epochs (edge/level bands and tracking only, not structure / rms / saturation / smear caps, shutter or temperature): 2026-10-14; 3344 vetted records feed the caps. Excluded entirely: 2026-10-14 CAL.R-FLT. Frozen at the legacy band (level-only records held out): none. Method: level/edge band = observed range over all healthy epochs +/- max(6sig,30ADU); structure/rms/saturation caps max(1.5 x max, med+8sig, floor) from the vetted epochs only (level-only: 2026-10-14). Regions: edge stripes y[2:28]&[2020:2046] x[100:1948]; sat>63000. The n column gives the level-band sample / the vetted sample; a detector with 0 vetted records takes its structure, rms, saturation and smear caps from the median of the other cameras of its colour.
 
 Units: ADU for levels, RMS and structure metrics; fraction of pixels for saturation; °C for temperature; seconds for shutter tolerances. Level and edge-background limits are a min–max band (WARN outside); RMS (1.4826 x MAD), structure (std of the per-row / per-column medians) and saturation are one-sided caps. On BIAS/DARK the row/col caps are WARN and the 4x "FAIL max" columns are the `*_gross` FAIL tier; on LDLS/ARC the structure cap is FAIL, on SKY it is WARN (on ARC the structure is divided by the lamp signal, see that section). Static FAIL rules on every set: `edge_saturated` (bottom-stripe median > 63000 ADU) and, on BIAS/DARK, `saturation_gross` (> 1 % of pixels above 63000 ADU). "—" means that readout mode is not modelled for that detector (the rule is SKIPPED, never failed). A missing camera in a frame is a placeholder extension: its pixel rules are skipped and the frame FAILs `camera_present` for it unless the camera is listed in `configs/camera_status.yaml`.
 
@@ -66,63 +66,65 @@ Margins over each camera's own baseline median: red WARN +10 / FAIL +16 °C, gre
 
 ## BIAS (`CAL.R-BIA`)
 
+**Row stripes** (FAIL): the largest jump of the per-row interquartile mean (25 % trimmed from each end of the row) off its 15-row running median, ignoring 8 rows at each end. A smooth ramp or gradient follows the running median; a single bright or dark row does not. Cap = 1.5 x the largest vetted value, floor 2 ADU.
+
 ### BIAS — readout mode FAST
 
-| detector | n baseline (level / vetted) | edge-bg min | edge-bg max | level min | level max | rms (robust) max | row max | col max | row FAIL max (4x) | col FAIL max (4x) | sat frac max |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1.A.Red | 36 / 25 | 1688.73 | 1834.27 | 1688.73 | 1835.27 | 11.1195 | 2 | 2 | 8 | 8 | 0.0005 |
-| 1.A.Green | 36 / 25 | 833 | 914 | 834 | 915 | 13.3434 | 2 | 2 | 8 | 8 | 0.0005 |
-| 1.A.Blue | 11 / 0 | 929 | 993 | 929 | 993 | 13.3434 | 2 | 2 | 8 | 8 | 0.0005 |
-| 1.B.Red | 36 / 25 | 1523 | 1602 | 1524 | 1604 | 11.1195 | 2 | 2 | 8 | 8 | 0.0005 |
-| 1.B.Green | 36 / 25 | 1008 | 1074 | 1010 | 1076 | 13.3434 | 2 | 2 | 8 | 8 | 0.0005 |
-| 1.B.Blue | 36 / 25 | 1193 | 1264 | 1193 | 1264 | 11.1195 | 2 | 2 | 8 | 8 | 0.0005 |
-| 2.A.Red | 36 / 25 | 728.84 | 909.16 | 733.28 | 904.72 | 13.3434 | 2 | 2 | 8 | 8 | 0.0005 |
-| 2.A.Green | 36 / 25 | 821 | 909 | 822 | 910 | 13.3434 | 2.0845 | 2 | 8.338 | 8 | 0.0005 |
-| 2.A.Blue | 36 / 25 | 732.18 | 872.82 | 732.18 | 872.82 | 13.3434 | 2 | 2 | 8 | 8 | 0.0005 |
-| 2.B.Red | 36 / 25 | 1601.52 | 1715.48 | 1601.52 | 1715.48 | 11.1195 | 2 | 2 | 8 | 8 | 0.0005 |
-| 2.B.Green | 36 / 25 | 730 | 794 | 730 | 794 | 11.1195 | 2 | 2 | 8 | 8 | 0.0005 |
-| 2.B.Blue | 36 / 25 | 1361 | 1463 | 1361 | 1463 | 13.3434 | 2 | 2 | 8 | 8 | 0.0005 |
-| 3.A.Red | 36 / 25 | 1695.52 | 1805.48 | 1695.52 | 1805.48 | 11.1195 | 2 | 2 | 8 | 8 | 0.0005 |
-| 3.A.Green | 36 / 25 | 755 | 834 | 755 | 835 | 13.3434 | 2 | 2 | 8 | 8 | 0.0005 |
-| 3.A.Blue | 36 / 25 | 1402 | 1479 | 1402 | 1479 | 11.1195 | 2123.2768 | 2 | 8493.1072 | 8 | 0.0007 |
-| 3.B.Red | 36 / 25 | 1440.42 | 1528.58 | 1441.42 | 1529.58 | 11.1195 | 2.4117 | 2 | 9.6468 | 8 | 0.0005 |
-| 3.B.Green | 36 / 25 | 837 | 912 | 837 | 913 | 13.3434 | 2 | 2 | 8 | 8 | 0.0005 |
-| 3.B.Blue | 36 / 25 | 1036 | 1102 | 1036 | 1102 | 13.3434 | 2 | 2 | 8 | 8 | 0.0005 |
-| 4.A.Red | 36 / 25 | 1489 | 1569 | 1465.87 | 1558.13 | 73.5109 | 202.4371 | 706.4604 | 809.7484 | 2825.8416 | 0.0005 |
-| 4.A.Green | 36 / 25 | 814.52 | 936.48 | 815.52 | 937.48 | 13.3434 | 2 | 2 | 8 | 8 | 0.0005 |
-| 4.A.Blue | 11 / 0 | 1058 | 1123 | 1058 | 1123 | 13.3434 | 2 | 2 | 8 | 8 | 0.0005 |
-| 4.B.Red | 36 / 25 | 1877 | 1985 | 1877 | 1986 | 11.1195 | 2 | 2 | 8 | 8 | 0.0005 |
-| 4.B.Green | 36 / 25 | 755 | 855 | 756 | 856 | 13.3434 | 2.3655 | 2 | 9.462 | 8 | 0.0005 |
-| 4.B.Blue | 36 / 25 | 821.42 | 927.58 | 816.97 | 932.03 | 13.3434 | 2 | 2 | 8 | 8 | 0.0005 |
+| detector | n baseline (level / vetted) | edge-bg min | edge-bg max | level min | level max | rms (robust) max | row max | col max | row FAIL max (4x) | col FAIL max (4x) | row stripes FAIL max | sat frac max |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1.A.Red | 36 / 25 | 1688.73 | 1834.27 | 1688.73 | 1835.27 | 11.1195 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 1.A.Green | 36 / 25 | 833 | 914 | 834 | 915 | 13.3434 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 1.A.Blue | 11 / 0 | 929 | 993 | 929 | 993 | 13.3434 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 1.B.Red | 36 / 25 | 1523 | 1602 | 1524 | 1604 | 11.1195 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 1.B.Green | 36 / 25 | 1008 | 1074 | 1010 | 1076 | 13.3434 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 1.B.Blue | 36 / 25 | 1193 | 1264 | 1193 | 1264 | 11.1195 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 2.A.Red | 36 / 25 | 728.84 | 909.16 | 733.28 | 904.72 | 13.3434 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 2.A.Green | 36 / 25 | 821 | 909 | 822 | 910 | 13.3434 | 2.0845 | 2 | 8.338 | 8 | 2 | 0.0005 |
+| 2.A.Blue | 36 / 25 | 732.18 | 872.82 | 732.18 | 872.82 | 13.3434 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 2.B.Red | 36 / 25 | 1601.52 | 1715.48 | 1601.52 | 1715.48 | 11.1195 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 2.B.Green | 36 / 25 | 730 | 794 | 730 | 794 | 11.1195 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 2.B.Blue | 36 / 25 | 1361 | 1463 | 1361 | 1463 | 13.3434 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 3.A.Red | 36 / 25 | 1695.52 | 1805.48 | 1695.52 | 1805.48 | 11.1195 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 3.A.Green | 36 / 25 | 755 | 834 | 755 | 835 | 13.3434 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 3.A.Blue | 36 / 25 | 1402 | 1479 | 1402 | 1479 | 11.1195 | 2123.2768 | 2 | 8493.1072 | 8 | 2 | 0.0007 |
+| 3.B.Red | 36 / 25 | 1440.42 | 1528.58 | 1441.42 | 1529.58 | 11.1195 | 2.4117 | 2 | 9.6468 | 8 | 2 | 0.0005 |
+| 3.B.Green | 36 / 25 | 837 | 912 | 837 | 913 | 13.3434 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 3.B.Blue | 36 / 25 | 1036 | 1102 | 1036 | 1102 | 13.3434 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 4.A.Red | 36 / 25 | 1489 | 1569 | 1465.87 | 1558.13 | 73.5109 | 202.4371 | 706.4604 | 809.7484 | 2825.8416 | 27.7579 | 0.0005 |
+| 4.A.Green | 36 / 25 | 814.52 | 936.48 | 815.52 | 937.48 | 13.3434 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 4.A.Blue | 11 / 0 | 1058 | 1123 | 1058 | 1123 | 13.3434 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 4.B.Red | 36 / 25 | 1877 | 1985 | 1877 | 1986 | 11.1195 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 4.B.Green | 36 / 25 | 755 | 855 | 756 | 856 | 13.3434 | 2.3655 | 2 | 9.462 | 8 | 2 | 0.0005 |
+| 4.B.Blue | 36 / 25 | 821.42 | 927.58 | 816.97 | 932.03 | 13.3434 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
 
 ### BIAS — readout mode SLOW
 
-| detector | n baseline (level / vetted) | edge-bg min | edge-bg max | level min | level max | rms (robust) max | row max | col max | row FAIL max (4x) | col FAIL max (4x) | sat frac max |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1.A.Red | 33 / 22 | 1632 | 1695 | 1632 | 1695 | 5 | 2 | 2 | 8 | 8 | 0.0005 |
-| 1.A.Green | 33 / 22 | 660 | 723 | 663 | 725 | 5 | 2 | 2 | 8 | 8 | 0.0005 |
-| 1.A.Blue | 11 / 0 | 699 | 759 | 699 | 759 | 5 | 2 | 2 | 8 | 8 | 0.0005 |
-| 1.B.Red | 33 / 22 | 1640 | 1707 | 1640 | 1707 | 5 | 2 | 2 | 8 | 8 | 0.0005 |
-| 1.B.Green | 33 / 22 | 629 | 706 | 629 | 706 | 5 | 2 | 2 | 8 | 8 | 0.0005 |
-| 1.B.Blue | 33 / 22 | 673 | 734 | 673 | 734 | 5 | 2 | 2 | 8 | 8 | 0.0005 |
-| 2.A.Red | 33 / 22 | 1552 | 1616 | 1552 | 1616 | 5 | 2 | 2 | 8 | 8 | 0.0005 |
-| 2.A.Green | 33 / 22 | 606 | 671 | 606 | 671 | 5 | 2 | 2 | 8 | 8 | 0.0005 |
-| 2.A.Blue | 33 / 22 | 519 | 583 | 519 | 583 | 5 | 2 | 2 | 8 | 8 | 0.0005 |
-| 2.B.Red | 33 / 22 | 1525 | 1593 | 1525 | 1593 | 5 | 2 | 2 | 8 | 8 | 0.0005 |
-| 2.B.Green | 22 / 22 | 616.5 | 646.5 | 615.5 | 645.5 | 5 | 2.4282 | 2 | 9.7128 | 8 | 0.0005 |
-| 2.B.Blue | 33 / 22 | 472 | 542 | 471 | 540 | 5 | 2 | 2 | 8 | 8 | 0.0005 |
-| 3.A.Red | 33 / 22 | 1649 | 1713 | 1649 | 1713 | 5 | 2 | 2 | 8 | 8 | 0.0005 |
-| 3.A.Green | 33 / 22 | 662 | 791 | 661 | 791 | 5 | 2 | 2 | 8 | 8 | 0.0005 |
-| 3.A.Blue | 33 / 22 | 463 | 524 | 462 | 523 | 5 | 2154.8387 | 2 | 8619.3548 | 8 | 0.0007 |
-| 3.B.Red | 33 / 22 | 1580 | 1662 | 1580 | 1662 | 5 | 2 | 2 | 8 | 8 | 0.0005 |
-| 3.B.Green | 33 / 22 | 644 | 725 | 643 | 725 | 5 | 2 | 2 | 8 | 8 | 0.0005 |
-| 3.B.Blue | 33 / 22 | 803 | 865 | 804 | 865 | 5 | 2 | 2 | 8 | 8 | 0.0005 |
-| 4.A.Red | 33 / 22 | 1504 | 1565 | 1504 | 1565 | 5 | 2 | 2 | 8 | 8 | 0.0005 |
-| 4.A.Green | 33 / 22 | 247 | 330 | 245 | 329 | 5 | 2 | 2 | 8 | 8 | 0.0005 |
-| 4.A.Blue | 11 / 0 | 831 | 891 | 831 | 891 | 5 | 2 | 2 | 8 | 8 | 0.0005 |
-| 4.B.Red | 33 / 22 | 1685 | 1747 | 1685 | 1748 | 5 | 2 | 2 | 8 | 8 | 0.0005 |
-| 4.B.Green | 33 / 22 | 637 | 706 | 637 | 706 | 5 | 2 | 2 | 8 | 8 | 0.0005 |
-| 4.B.Blue | 33 / 22 | 646 | 706 | 646 | 707 | 5 | 2 | 2 | 8 | 8 | 0.0005 |
+| detector | n baseline (level / vetted) | edge-bg min | edge-bg max | level min | level max | rms (robust) max | row max | col max | row FAIL max (4x) | col FAIL max (4x) | row stripes FAIL max | sat frac max |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1.A.Red | 33 / 22 | 1632 | 1695 | 1632 | 1695 | 5 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 1.A.Green | 33 / 22 | 660 | 723 | 663 | 725 | 5 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 1.A.Blue | 11 / 0 | 699 | 759 | 699 | 759 | 5 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 1.B.Red | 33 / 22 | 1640 | 1707 | 1640 | 1707 | 5 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 1.B.Green | 33 / 22 | 629 | 706 | 629 | 706 | 5 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 1.B.Blue | 33 / 22 | 673 | 734 | 673 | 734 | 5 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 2.A.Red | 33 / 22 | 1552 | 1616 | 1552 | 1616 | 5 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 2.A.Green | 33 / 22 | 606 | 671 | 606 | 671 | 5 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 2.A.Blue | 33 / 22 | 519 | 583 | 519 | 583 | 5 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 2.B.Red | 33 / 22 | 1525 | 1593 | 1525 | 1593 | 5 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 2.B.Green | 33 / 22 | 600 | 719 | 599 | 698 | 5 | 2.4282 | 2 | 9.7128 | 8 | 2 | 0.0005 |
+| 2.B.Blue | 33 / 22 | 472 | 542 | 471 | 540 | 5 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 3.A.Red | 33 / 22 | 1649 | 1713 | 1649 | 1713 | 5 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 3.A.Green | 33 / 22 | 662 | 791 | 661 | 791 | 5 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 3.A.Blue | 33 / 22 | 463 | 524 | 462 | 523 | 5 | 2154.8387 | 2 | 8619.3548 | 8 | 2 | 0.0007 |
+| 3.B.Red | 33 / 22 | 1580 | 1662 | 1580 | 1662 | 5 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 3.B.Green | 33 / 22 | 644 | 725 | 643 | 725 | 5 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 3.B.Blue | 33 / 22 | 803 | 865 | 804 | 865 | 5 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 4.A.Red | 33 / 22 | 1504 | 1565 | 1504 | 1565 | 5 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 4.A.Green | 33 / 22 | 247 | 330 | 245 | 329 | 5 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 4.A.Blue | 11 / 0 | 831 | 891 | 831 | 891 | 5 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 4.B.Red | 33 / 22 | 1685 | 1747 | 1685 | 1748 | 5 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 4.B.Green | 33 / 22 | 637 | 706 | 637 | 706 | 5 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
+| 4.B.Blue | 33 / 22 | 646 | 706 | 646 | 707 | 5 | 2 | 2 | 8 | 8 | 2 | 0.0005 |
 
 ## DARK (`CAL.R-DRK`)
 
@@ -140,7 +142,7 @@ Margins over each camera's own baseline median: red WARN +10 / FAIL +16 °C, gre
 | 2.A.Green | 10 / 6 | 612 | 735 | 613 | 745 | 6.6717 | 2 | 2 | 8 | 8 | 0.0005 |
 | 2.A.Blue | 10 / 6 | 520 | 640 | 520 | 639 | 5 | 2 | 2 | 8 | 8 | 0.0005 |
 | 2.B.Red | 10 / 6 | 1532 | 1601 | 1532 | 1605 | 5 | 2 | 2 | 8 | 8 | 0.0005 |
-| 2.B.Green | 6 / 6 | 619 | 649 | 618 | 648 | 5 | 2.1934 | 2 | 8.7736 | 8 | 0.0005 |
+| 2.B.Green | 10 / 6 | 602 | 726 | 594.42 | 732.58 | 5 | 2.1934 | 2 | 8.7736 | 8 | 0.0005 |
 | 2.B.Blue | 10 / 6 | 474 | 579 | 472 | 579 | 5 | 2 | 2 | 8 | 8 | 0.0005 |
 | 3.A.Red | 10 / 6 | 1651 | 1722 | 1651 | 1723 | 5 | 2 | 2 | 8 | 8 | 0.0005 |
 | 3.A.Green | 10 / 6 | 665 | 814 | 663 | 818 | 5 | 2 | 2 | 8 | 8 | 0.0005 |
@@ -231,7 +233,7 @@ Margins over each camera's own baseline median: red WARN +10 / FAIL +16 °C, gre
 | 2.A.Green | 16 / 16 | 507.77 | 981.23 | 9295.2162 | 8251.1963 | 0.0021 |
 | 2.A.Blue | 16 / 16 | 488.84 | 722.16 | 4208.2152 | 8059.2157 | 0.0005 |
 | 2.B.Red | 16 / 16 | 1429.43 | 1933.57 | 21171.8786 | 17668.5099 | 0.2295 |
-| 2.B.Green | 16 / 16 | 654.97 | 735.03 | 10539.0886 | 8352.1876 | 0.0067 |
+| 2.B.Green | 16 / 16 | 608.97 | 855.03 | 10539.0886 | 8352.1876 | 0.0067 |
 | 2.B.Blue | 16 / 16 | 449.73 | 650.27 | 3718.9461 | 6861.2305 | 0.0005 |
 | 3.A.Red | 16 / 16 | 1554.88 | 2050.12 | 14661.9174 | 17359.6962 | 0.2095 |
 | 3.A.Green | 16 / 16 | 577.12 | 998.88 | 10509.8577 | 7527.8599 | 0.0035 |
@@ -293,7 +295,7 @@ Row / column structure on this type is **normalised by the lamp signal** (struct
 | 2.A.Green | 12 / 9 | 607 | 673 | 0.6224 | 0.6636 | 0.3347 | 0.0005 |
 | 2.A.Blue | 12 / 9 | 520 | 585 | 0.5139 | 0.9603 | 0.5008 | 0.0005 |
 | 2.B.Red | 12 / 9 | 1560 | 1626 | 0.4902 | 2.501 | 0.0558 | 0.0454 |
-| 2.B.Green | 9 / 9 | 616 | 646 | 0.6513 | 0.9124 | 0.6163 | 0.0005 |
+| 2.B.Green | 12 / 9 | 599 | 701 | 0.6513 | 0.9124 | 0.6163 | 0.0005 |
 | 2.B.Blue | 12 / 9 | 474 | 544 | 0.5444 | 0.9783 | 0.3647 | 0.0005 |
 | 3.A.Red | 12 / 9 | 1678 | 1746 | 0.3362 | 1.8917 | 0.0714 | 0.0271 |
 | 3.A.Green | 12 / 9 | 638.07 | 811.93 | 0.6009 | 0.6306 | 0.2522 | 0.0005 |

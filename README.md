@@ -56,7 +56,7 @@ that fired, naming the detector responsible.
 - It takes one frame at a time. Pointed at a directory it exits `3`.
 - **A full 24-detector frame takes well under a second, and the time depends on the frame type,
   not on the verdict.** Every pixel metric is computed once per detector, from a value histogram
-  or one sort per axis shared by all the structure/smear rules, and the detectors are measured in
+  or one sort per axis shared by all the structure/smear/stripe rules, and the detectors are measured in
   parallel (`--jobs N` threads, default 4; `--jobs 1` disables threading). A failing frame costs
   the same as a passing frame of the same type. On a laptop (median of 3 runs, default 4 threads):
   ~0.45 s for a science frame, ~0.5 s for a bias or dark, ~0.6 s for an arc or sky flat
@@ -139,6 +139,7 @@ on a bias means the frame is not usable as a bias, not that one detector is nois
 | Shutter vs requested time | shutter stuck open, exposure aborted or truncated | **FAIL**; on a bias, shutter lag beyond the tolerance is WARN and only an actual exposure above 0.5 s is **FAIL** |
 | Edge stripe saturated | light flooding the unilluminated edge of the detector: a railed or grossly overexposed frame | **FAIL** (every frame type, incl. science) |
 | Row / column structure | banding, bars, a warming glow | bias/dark: WARN above the detector's cap, **FAIL** above 4× the cap; LDLS: **FAIL** above the cap; ThAr arcs: **FAIL** above the cap on structure ÷ lamp signal (exposure-independent); sky flats: WARN |
+| Row stripes (biases only) | random bright or dark rows from a faulty readout, as on 2.B.Green SLOW on 2026-10-14 | **FAIL** above the detector's cap (2 ADU; 4.A.Red FAST 27.8) on the largest jump of a row's interquartile mean off its 15-row running median |
 | Vertical smear (ThAr arcs only) | a vertical halo or charge smear around the lines, as on the 2026-07-10 commissioning arcs | **FAIL** above the detector's cap on std(per-column median) ÷ lamp signal |
 | Saturation | light leak or saturated pixels (above 63000 ADU) | WARN above the detector's cap; bias/dark **FAIL** above 1 % of the frame |
 | CCD temperature — warm / hot / shut-off | cooling degrading or failed | WARN / **FAIL** / **FAIL** |
@@ -469,7 +470,7 @@ python scripts/gen_configs.py                    # -> llamas_checks/configs/qa_c
 llamas-checks-validate llamas_checks/configs/qa_config_cal.yaml
 llamas-checks-validate llamas_checks/configs/qa_config_science.yaml
 python scripts/gen_thresholds_doc.py             # -> docs/QA_THRESHOLDS_TABLES.md
-python scripts/gen_examples_doc.py               # -> docs/QA_EXAMPLES.md + docs/images/ (needs all five data roots)
+python scripts/gen_examples_doc.py               # -> docs/QA_EXAMPLES.md + docs/images/ (needs all six data roots)
 ```
 
 To confirm that a change to the engine leaves every verdict and measured value unchanged,

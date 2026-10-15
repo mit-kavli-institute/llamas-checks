@@ -412,6 +412,27 @@ Zoomed detector 2.B.Green: median 632 ADU, robust rms 4.4, row structure 6.68, c
 | WARN | `row_structure` | 2.B.Green | 6.68 | max 2.193 |
 
 
+### SLOW bias with row stripes on 2.B.Green (October 14)
+
+- File: `/Users/slh/Library/CloudStorage/Box-Box/slhughes/Llamas_Commissioning_Data/20261014_15/LLAMAS_2026-10-14_18-09-47.2_CAL24_mef.fits`
+- Header: `BIAS` / PRODCATG `CAL.R-BIA` / READ-MDE `SLOW` / REXPTIME 0.001 s / SEXPTIME 0.386 s
+- **Verdict: FAIL** (`llamas-checks` exit 2); previously: WARN (row_structure, level and edge @ 2.B.Green)
+
+Random bright and dark rows across 2.B.Green, up to ~17 ADU off their neighbours: a readout fault seen on 8 of the 11 SLOW biases that night. row_stripes (largest jump of the per-row interquartile mean off its 15-row running median) reads 16.7 against a 2 ADU cap; healthy SLOW biases read <= 0.34. The 667 ADU level is the detector's new normal and no longer warns.
+
+![fail_bias_stripes_2bgreen mosaic](images/fail_bias_stripes_2bgreen_mosaic.jpg)
+
+![fail_bias_stripes_2bgreen zoom](images/fail_bias_stripes_2bgreen_zoom.jpg)
+
+Zoomed detector 2.B.Green: median 667 ADU, robust rms 3.0, row structure 2.89, column structure 0.20, saturated fraction 0.000.
+
+| severity | rule | detector | value | limit |
+|---|---|---|---|---|
+| FAIL | `row_stripes` | 2.B.Green | 16.67 | max 2 |
+| WARN | `row_structure` | 2.B.Green | 2.887 | max 2.428 |
+| WARN | `shutter_exptime_consistency` | - | 0.385 | abs_tol 0.214, rel_tol 0.1 |
+
+
 ### ThAr arc with odd structure on every detector (July 10)
 
 - File: `/Users/slh/Library/CloudStorage/Box-Box/slhughes/Llamas_Commissioning_Data/ut20260710_11/LLAMAS_2026-07-10_20-22-43.7_CAL22_mef.fits`
@@ -527,6 +548,7 @@ ValueError: cannot reshape array of size 3967936 into shape (2048,2048)
 | LDLS flat, 0.07 s, railed on every detector | WARN (28 warn checks, exit 1) | **FAIL** | 2 |
 | LDLS flat, 0.3 s, edge stripes railed in the reds | WARN (13 warn checks, exit 1) | **FAIL** | 2 |
 | 600 s dark with periodic column bars (June 4) | FAIL (column_structure @ 2.B.Green) | **FAIL** | 2 |
+| SLOW bias with row stripes on 2.B.Green (October 14) | WARN (row_structure, level and edge @ 2.B.Green) | **FAIL** | 2 |
 | ThAr arc with odd structure on every detector (July 10) | FAIL (column_structure on 22/22 detectors) | **FAIL** | 2 |
 | Science frame with a shutter fault (600 s requested) | FAIL (shutter_exptime_consistency) | **FAIL** | 2 |
 | Baseline LDLS flat with a shutter overrun (June 30) | PASS (undetected) | **FAIL** | 2 |

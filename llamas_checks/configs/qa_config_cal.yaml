@@ -1,4 +1,4 @@
-# LLAMAS calibration QA config -- GENERATED from robust baseline analysis (2026-04-07/05-02/06-30 + 2026-10-14 level-only; trimmed-mean structure profiles + MAD rms, WARN/FAIL tiers, 2026-09; ThAr structure normalised by lamp signal + vertical-smear rule (15-column running median), 2026-10; level/edge bands = observed range + max(6 sigma, 30 ADU) drift margin, 2.B.Green SLOW frozen at its legacy band, 2026-10). See docs/QA_CHECKS_CATALOGUE.md; regenerate via scripts/gen_configs.py.
+# LLAMAS calibration QA config -- GENERATED from robust baseline analysis (2026-04-07/05-02/06-30 + 2026-10-14 level-only; trimmed-mean structure profiles + MAD rms, WARN/FAIL tiers, 2026-09; ThAr structure normalised by lamp signal + vertical-smear rule (15-column running median), 2026-10; level/edge bands = observed range + max(6 sigma, 30 ADU) drift margin, 2026-10; bias row-stripe FAIL rule, 2.B.Green SLOW unfrozen, 2026-10-15). See docs/QA_CHECKS_CATALOGUE.md; regenerate via scripts/gen_configs.py.
 config_version: '1.0'
 instrument:
   name: LLAMAS
@@ -174,6 +174,11 @@ metrics:
     - REXPTIME
     - EXPTIME
     min_exptime: 8.0
+  row_stripes:
+    type: row_stripes
+    trim: 0.25
+    smooth_rows: 15
+    edge_rows: 8
 verdict_policy:
   fail_if_any_fail: true
   warn_if_any_warn: true
@@ -351,8 +356,8 @@ lookup_tables:
         min: 730.0
         max: 794.0
       SLOW:
-        min: 616.5
-        max: 646.5
+        min: 600.0
+        max: 719.0
     2.B.Blue:
       FAST:
         min: 1361.0
@@ -927,8 +932,8 @@ lookup_tables:
         med_max: 794.0
         rms_max: 11.1195
       SLOW:
-        med_min: 615.5
-        med_max: 645.5
+        med_min: 599.0
+        med_max: 698.0
         rms_max: 5.0
     2.B.Blue:
       FAST:
@@ -1047,6 +1052,127 @@ lookup_tables:
         med_min: 646.0
         med_max: 707.0
         rms_max: 5.0
+  stripe_BIAS:
+    1.A.Red:
+      FAST:
+        row_fail_max: 2.0
+      SLOW:
+        row_fail_max: 2.0
+    1.A.Green:
+      FAST:
+        row_fail_max: 2.0
+      SLOW:
+        row_fail_max: 2.0
+    1.A.Blue:
+      FAST:
+        row_fail_max: 2.0
+      SLOW:
+        row_fail_max: 2.0
+    1.B.Red:
+      FAST:
+        row_fail_max: 2.0
+      SLOW:
+        row_fail_max: 2.0
+    1.B.Green:
+      FAST:
+        row_fail_max: 2.0
+      SLOW:
+        row_fail_max: 2.0
+    1.B.Blue:
+      FAST:
+        row_fail_max: 2.0
+      SLOW:
+        row_fail_max: 2.0
+    2.A.Red:
+      FAST:
+        row_fail_max: 2.0
+      SLOW:
+        row_fail_max: 2.0
+    2.A.Green:
+      FAST:
+        row_fail_max: 2.0
+      SLOW:
+        row_fail_max: 2.0
+    2.A.Blue:
+      FAST:
+        row_fail_max: 2.0
+      SLOW:
+        row_fail_max: 2.0
+    2.B.Red:
+      FAST:
+        row_fail_max: 2.0
+      SLOW:
+        row_fail_max: 2.0
+    2.B.Green:
+      FAST:
+        row_fail_max: 2.0
+      SLOW:
+        row_fail_max: 2.0
+    2.B.Blue:
+      FAST:
+        row_fail_max: 2.0
+      SLOW:
+        row_fail_max: 2.0
+    3.A.Red:
+      FAST:
+        row_fail_max: 2.0
+      SLOW:
+        row_fail_max: 2.0
+    3.A.Green:
+      FAST:
+        row_fail_max: 2.0
+      SLOW:
+        row_fail_max: 2.0
+    3.A.Blue:
+      FAST:
+        row_fail_max: 2.0
+      SLOW:
+        row_fail_max: 2.0
+    3.B.Red:
+      FAST:
+        row_fail_max: 2.0
+      SLOW:
+        row_fail_max: 2.0
+    3.B.Green:
+      FAST:
+        row_fail_max: 2.0
+      SLOW:
+        row_fail_max: 2.0
+    3.B.Blue:
+      FAST:
+        row_fail_max: 2.0
+      SLOW:
+        row_fail_max: 2.0
+    4.A.Red:
+      FAST:
+        row_fail_max: 27.7579
+      SLOW:
+        row_fail_max: 2.0
+    4.A.Green:
+      FAST:
+        row_fail_max: 2.0
+      SLOW:
+        row_fail_max: 2.0
+    4.A.Blue:
+      FAST:
+        row_fail_max: 2.0
+      SLOW:
+        row_fail_max: 2.0
+    4.B.Red:
+      FAST:
+        row_fail_max: 2.0
+      SLOW:
+        row_fail_max: 2.0
+    4.B.Green:
+      FAST:
+        row_fail_max: 2.0
+      SLOW:
+        row_fail_max: 2.0
+    4.B.Blue:
+      FAST:
+        row_fail_max: 2.0
+      SLOW:
+        row_fail_max: 2.0
   edge_bg_DARK:
     1.A.Red:
       SLOW:
@@ -1090,8 +1216,8 @@ lookup_tables:
         max: 1601.0
     2.B.Green:
       SLOW:
-        min: 619.0
-        max: 649.0
+        min: 602.0
+        max: 726.0
     2.B.Blue:
       SLOW:
         min: 474.0
@@ -1415,8 +1541,8 @@ lookup_tables:
         rms_max: 5.0
     2.B.Green:
       SLOW:
-        med_min: 618.0
-        med_max: 648.0
+        med_min: 594.42
+        med_max: 732.58
         rms_max: 5.0
     2.B.Blue:
       SLOW:
@@ -1874,8 +2000,8 @@ lookup_tables:
         min: 654.25
         max: 1057.75
       SLOW:
-        min: 654.97
-        max: 735.03
+        min: 608.97
+        max: 855.03
     2.B.Blue:
       FAST:
         min: 1328.73
@@ -2429,8 +2555,8 @@ lookup_tables:
         min: 730.0
         max: 793.0
       SLOW:
-        min: 616.0
-        max: 646.0
+        min: 599.0
+        max: 701.0
     2.B.Blue:
       FAST:
         min: 1364.0
@@ -3027,6 +3153,15 @@ rule_sets:
         table: struct_BIAS
         keys: *id001
         max_field: col_fail_max
+    - name: row_stripes
+      region: full_frame
+      metric: row_stripes
+      per_extension: true
+      severity: FAIL
+      expected_from_lookup:
+        table: stripe_BIAS
+        keys: *id001
+        max_field: row_fail_max
     - name: saturation_fraction
       region: full_frame
       metric: saturated_fraction

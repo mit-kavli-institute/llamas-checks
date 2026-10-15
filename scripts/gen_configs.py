@@ -147,6 +147,14 @@ smear_leaf = lambda e: {"max": _get(e, "smear", "max")}
 MIN_SIGNAL_SMEAR = 20.0  # ADU; green/blue column medians are noise below this
 SMEAR_SMOOTH_COLUMNS = 15  # running median that removes narrow vertical lines (aggregate_thresholds)
 sat_leaf = lambda e: {"frac_max": _get(e, "sat_frac_max")}
+# Bias row stripes (2.B.Green SLOW, 2026-10-14): largest jump of the per-row
+# interquartile mean off its running median over STRIPE_SMOOTH_ROWS rows, ignoring
+# STRIPE_EDGE_ROWS at each end (the bias ramps up over the first ~6 rows). FAIL at
+# the per-detector heavy-tail cap (floor 2 ADU, aggregate_thresholds.FLOOR_STRIPE).
+stripe_leaf = lambda e: {"row_fail_max": _get(e, "stripe", "row_fail_max")}
+STRIPE_TRIM = 0.25         # must match qa_engine.DEFAULT_STRIPE_TRIM / extract_stats.py
+STRIPE_SMOOTH_ROWS = 15
+STRIPE_EDGE_ROWS = 8
 
 KEYS = [{"from": "extension.name"}, {"from": "metadata.readout_mode"}]
 
@@ -349,6 +357,14 @@ def smear_rule(table, severity="FAIL"):
             "expected_from_lookup": {"table": table, "keys": KEYS, "max_field": "max"}}
 
 
+def stripe_rule(table, severity="FAIL"):
+    """Bias row stripes: largest single-row jump of the interquartile-mean row profile
+    off its running median, against the per-detector cap in ``table`` (row_fail_max)."""
+    return {"name": "row_stripes", "region": "full_frame", "metric": "row_stripes",
+            "per_extension": True, "severity": severity,
+            "expected_from_lookup": {"table": table, "keys": KEYS, "max_field": "row_fail_max"}}
+
+
 def sat_rule(table, severity):
     return {"name": "saturation_fraction", "region": "full_frame", "metric": "saturated_fraction",
             "per_extension": True, "severity": severity,
@@ -369,6 +385,10 @@ def edge_sat_rule():
 
 def build_cal_config():
     cfg = base_blocks()
+    # bias only: interquartile-mean row profile vs its running median (row stripes)
+    cfg["metrics"]["row_stripes"] = {"type": "row_stripes", "trim": STRIPE_TRIM,
+                                     "smooth_rows": STRIPE_SMOOTH_ROWS,
+                                     "edge_rows": STRIPE_EDGE_ROWS}
     lookup, rule_sets = {}, {}
     lookup["temp"] = build_temp_table()   # per-camera CCD temperature caps (shared by all cal types)
     # (PRODCATG, set_name, uniform?, structure severity at the cap)
@@ -398,6 +418,10 @@ def build_cal_config():
             lv = f"level_{setname}"; lookup[lv] = build_table(pc, level_leaf)
             rules += level_rules(lv, "WARN")
             rules += struct_rules(st, struct_sev, gross=True)
+            if pc == "CAL.R-BIA":
+                sp = f"stripe_{setname}"
+                lookup[sp] = build_table(pc, stripe_leaf)
+                rules += [stripe_rule(sp, "FAIL")]
             rules += [sat_rule(sa, "WARN"), sat_gross_rule()]
         else:
             rules += struct_rules(st, struct_sev, normalised=normalised)
@@ -465,7 +489,7 @@ def main():
            "(2026-04-07/05-02/06-30 + 2026-10-14 level-only; trimmed-mean structure profiles + MAD rms, "
            "WARN/FAIL tiers, 2026-09; ThAr structure normalised by lamp signal + vertical-smear rule "
            "(15-column running median), 2026-10; level/edge bands = observed range + max(6 sigma, 30 ADU) "
-           "drift margin, 2.B.Green SLOW frozen at its legacy band, 2026-10). "
+           "drift margin, 2026-10; bias row-stripe FAIL rule, 2.B.Green SLOW unfrozen, 2026-10-15). "
            "See docs/QA_CHECKS_CATALOGUE.md; regenerate via scripts/gen_configs.py.\n")
     dump(build_cal_config(), os.path.join(args.out_dir, "qa_config_cal.yaml"), hdr % "calibration")
     dump(build_science_config(), os.path.join(args.out_dir, "qa_config_science.yaml"), hdr % "science")

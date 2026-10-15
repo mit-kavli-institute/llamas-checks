@@ -103,10 +103,17 @@ cosmic rays since 2026-09):
   Whole-row/column offsets (banding, bars) and smooth glow gradients move it; a cluster of
   saturated pixels or a cosmic-ray trail (< 2 % of a line) does not. A plain median profile was
   tried and rejected: it missed the June-4 bars, which occupy a minority of each column.
+- **row stripes** (BIAS only) — the largest |P − running median of P over 15 rows| over rows
+  8 … n − 9, where P is the per-row **interquartile mean** (25 % dropped from each end of the row).
+  A smooth ramp or gradient follows its running median and reads ~0; a single bright or dark row
+  reads its offset. The 2 %-trimmed profile is not used because rows with more than 2 % hot pixels
+  move it (800–1600 ADU on 4.A.Red FAST in October, which would FAIL every October FAST bias), nor
+  the per-row median, which is quantised to 1 ADU and misses the 1 ADU stripes of 18-11-09.8. P
+  is a second slice of the same sorted rows as the row structure, so the check adds no sort.
 - **robust rms** — 1.4826 × median absolute deviation of the pixels (read noise).
 - **median**, **fraction > 63000 ADU** — as named.
 
-### BIAS (`CAL.R-BIA`) — 14 rules
+### BIAS (`CAL.R-BIA`) — 15 rules
 
 | rule | what is measured | limit | severity |
 |---|---|---|---|
@@ -118,6 +125,7 @@ cosmic rays since 2026-09):
 | `frame_noise_rms` | robust rms of `full_frame` | ≤ rms_max, per det × mode | WARN |
 | `row_structure` / `column_structure` | banding amplitude of `full_frame` | ≤ row_max / col_max, per det × mode | WARN |
 | `row_structure_gross` / `column_structure_gross` | same metric | ≤ 4 × row_max / col_max (`row_fail_max`, `col_fail_max`) | FAIL |
+| `row_stripes` | row stripes of `full_frame` (largest single-row jump of the interquartile-mean row profile off its 15-row running median) | ≤ row_fail_max, per det × mode (`stripe_BIAS`: 2.0 ADU except 4.A.Red FAST 27.8) | FAIL |
 | `saturation_fraction` | fraction of `full_frame` pixels > 63000 ADU | ≤ frac_max, per det × mode (≈ 5 × 10⁻⁴) | WARN |
 | `saturation_gross` | same metric | ≤ 0.01 (static) | FAIL |
 | `ccd_temperature_warm` | `CCDTEMP_1` / `CCDTEMP1` / `CCDTEMP-1` of this extension | within [−140, warn_max], per det | WARN |
@@ -127,7 +135,7 @@ cosmic rays since 2026-09):
 ### DARK (`CAL.R-DRK`) — 13 rules
 
 Identical to BIAS with the DARK tables, except that the shutter rule is FAIL (abs tolerance
-0.238 s) and there is no `shutter_exptime_gross` tier.
+0.238 s) and there is no `shutter_exptime_gross` or `row_stripes` rule.
 
 ### LDLS_FLAT (`CAL.R-FLT`), ARC_THAR (`CAL.R-ARC`) — 10 rules each (fixed lamp)
 
@@ -196,9 +204,10 @@ caught by the gradient *rate*, because dark current accrues per second while sky
 | CCD temperature cold floor | −140 °C | all types |
 | CCD temperature warm / hot margins | baseline + 8 / + 15 °C (green, blue); + 10 / + 16 °C (red) | per camera, all types |
 | structure cap floor | 2.0 ADU | all cal types |
+| row-stripe cap floor | 2.0 ADU | BIAS |
 | RMS cap floor | 5.0 ADU | BIAS, DARK |
 | saturation cap floor | 5 × 10⁻⁴ | all cal types |
-| level band drift margin | observed range ± max(6 σ, 30 ADU); 2.B.Green SLOW keeps median ± max(6 σ, 15 ADU) | BIAS, DARK, edge stripes |
+| level band drift margin | observed range ± max(6 σ, 30 ADU), every detector | BIAS, DARK, edge stripes |
 
 Per-camera temperature limits span a 26 °C range: 1.A.Red has a healthy baseline of −78.3 °C
 (WARN above −68.3, FAIL above −62.3) while 1.A.Green sits at −104.7 °C (WARN above −96.7, FAIL
@@ -229,8 +238,11 @@ without the frames):
 
 - Samples are **MAD sigma-clipped** first, so an anomalous baseline frame cannot inflate its own cap.
 - Level and edge-background bands: the observed range over all four epochs widened by
-  `max(6 σ_robust, 30 ADU)`. 2.B.Green SLOW, known-bad in October (+36 ADU), keeps the legacy
-  `median ± max(6 σ_robust, 15 ADU)` band and its October records are held out.
+  `max(6 σ_robust, 30 ADU)`. 2.B.Green SLOW was frozen at the legacy
+  `median ± max(6 σ_robust, 15 ADU)` band with its October records held out until 2026-10-15;
+  its October level (~667 ADU, +36) turned out to be the new normal (clean biases of the same night
+  sit there too), so it now gets the same range + margin band as every other detector (BIAS SLOW
+  level 599–698, edge 600–719). The row stripes it also showed are caught by `row_stripes`.
 - Structure, rms, saturation and smear caps, shutter and temperature tolerances come from the three
   vetted epochs only. 1.A.Blue and 4.A.Blue, which have no vetted record, take those caps from the
   median of the other blue cameras.
@@ -240,15 +252,18 @@ without the frames):
 - Row/column structure and saturation caps are **heavy-tail**: `max(1.5 × unscreened max, median + 8 σ_robust, floor)`
   with floors 2.0 (structure) and 5 × 10⁻⁴ (saturation). Persistently structured detectors keep their
   own loose cap instead of false-failing. On BIAS/DARK the cap is the WARN tier; the FAIL tier is 4 × the cap.
+- Row-stripe caps (BIAS only): heavy-tail `max(1.5 × max, median + 8 σ_robust, 2.0)` of the
+  vetted `row_stripe` values. Healthy SLOW biases read ≤ 0.34 ADU on every detector and FAST ≤ 1.0,
+  so the cap is the 2.0 ADU floor everywhere except 4.A.Red FAST (hot rows up to 17.9 ADU in
+  April–June, cap 27.8; ≤ 18.1 in October). The striped October 2.B.Green SLOW biases read 8.0–31.8,
+  clean ones 0.19–0.23.
 - CCD temperature: each camera's own sigma-clipped median plus the colour-aware margins above.
 - Shutter absolute tolerance per type: `2 × max(4σ-clipped |SEXPTIME − REXPTIME|) + 0.2 s`, with the
   relative tolerance fixed at 10 %. The 0.30 s overrun of the 2026-05-02 LDLS flat was clipped as an
   outlier, which is why that frame fails its own type's 0.252 s tolerance (§6.1).
 
-Self-check on the baselines themselves: none of the 4262 normal detector-frame records sits outside
-a range + margin edge-background band; 5 records of the frozen 2.B.Green SLOW (2026-05-02 and
-06-30 sky flats) sit outside its legacy band, and all 18 held-out October 2.B.Green SLOW records
-breach it; the held-out June-4 dark trips the DARK/SLOW
+Self-check on the baselines themselves: none of the 4280 normal detector-frame records sits outside
+its edge-background band; no vetted bias exceeds its row-stripe cap; the held-out June-4 dark trips the DARK/SLOW
 structure caps on 2.B.Green (row 6.7 vs 2.19, column 13.3 vs 2.0, i.e. 6.6 × the cap).
 
 Pipeline: `scripts/sort_baselines.py` → `scripts/extract_stats.py` → `scripts/aggregate_thresholds.py`
@@ -266,6 +281,7 @@ today the passing cases would write no file without `--report-all`). Paths:
 - **WARM** = `/Users/slh/Downloads/20260505_06-selected` (the 2026-05-06 warm-camera incident night)
 - **S06** = `/Users/slh/Library/CloudStorage/Box-Box/slhughes/Llamas_Commissioning_Data/20260906_07_cals`
 - **S07** = `/Users/slh/Library/CloudStorage/Box-Box/slhughes/Llamas_Commissioning_Data/20260907_08`
+- **OCT** = `/Users/slh/Library/CloudStorage/Box-Box/slhughes/Llamas_Commissioning_Data/20261014_15`
 
 Every frame below except the CAL0 ones has two placeholder cameras, `1.A.Blue` and `4.A.Blue`
 (22 live detectors; those cameras were out for repair at the time). The CAL0 frames from the
@@ -315,6 +331,20 @@ dimensionless.
 Result: `FAIL: 1 fail check(s): column_structure_gross@2.B.Green`, exit 2. The 1.B.Green "column
 structure" that the plain-mean metric also flagged on this frame (4.11 vs 2.0) was hot pixels: with
 the trimmed profile it measures 0.14 and passes, which is the intended behaviour.
+
+**SLOW biases with row stripes on 2.B.Green** — `OCT/LLAMAS_2026-10-14_18-09-47.2_CAL24_mef.fits`
+and seven more of the 11 SLOW biases of 2026-10-14 (run 2026-10-15). Random bright and dark rows
+across 2.B.Green, each offset over its whole length; `row_stripes` (cap 2.0 ADU) catches them.
+Before this rule the frames only WARNed (row_structure, plus a level/edge WARN from the then-frozen
+2.B.Green SLOW band).
+
+| frame (`OCT/LLAMAS_2026-10-14_<time>_CAL24_mef.fits`) | `row_stripes` 2.B.Green | result |
+|---|---|---|
+| 18-09-47.2, 18-11-09.8, 18-12-32.2, 18-13-54.0, 18-15-16.6, 18-16-40.2, 18-19-27.9 | 16.7, 8.0, 31.8, 31.8, 31.6, 12.7, 31.6 | **FAIL** `row_stripes@2.B.Green`, exit 2 |
+| 18-18-04.1 | 31.8 | **FAIL** `row_structure_gross` + `row_stripes` @ 2.B.Green, exit 2 |
+| 18-20-52.3, 18-23-36.0 | 0.23, 0.19 | **PASS**, exit 0 (were WARN on the frozen level band) |
+| 18-22-14.9 | 0.23 | **FAIL** `shutter_exptime_gross` (SEXPTIME 0.54 s), not stripes |
+| the 11 FAST biases 18-24-03.4 … 18-28-25.3 | 0.51–0.61 (4.A.Red 12.1–18.1, cap 27.8) | WARN (`row_structure@4.A.Green`, as before); no new FAIL |
 
 **Commissioning ThAr arcs with vertical halos / smear** — two consecutive frames, both FAST with a
 few-tenths-of-a-second SEXPTIME but carrying the signal of a multi-second arc. Saturated lines on
@@ -598,7 +628,7 @@ needed). Run with `pytest` from the repo root.
 ```bash
 pytest                                                    # 99 synthetic tests
 python scripts/gen_thresholds_doc.py                      # refresh QA_THRESHOLDS_TABLES.md from the YAMLs
-python scripts/gen_examples_doc.py                        # refresh QA_EXAMPLES.md + docs/images/ (all five data roots)
+python scripts/gen_examples_doc.py                        # refresh QA_EXAMPLES.md + docs/images/ (all six data roots)
 python scripts/batch_tally.py --baselines-root "$LLAMAS_QA_BASELINES" --out batch_tally.json
 python scripts/run_qa_tests.py                            # 23-case matrix (copies of the frames recommended)
 ```

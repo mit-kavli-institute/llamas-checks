@@ -14,6 +14,7 @@ or whose file is missing is reported as MISSING and skipped):
   --commissioning-dir   LLAMAS_QA_COMMISSIONING_DIR  ut20260710_11 commissioning frames
   --sept06-dir          LLAMAS_QA_SEPT06_DIR         Llamas_Commissioning_Data/20260906_07_cals
   --sept07-dir          LLAMAS_QA_SEPT07_DIR         Llamas_Commissioning_Data/20260907_08
+  --oct14-dir           LLAMAS_QA_OCT14_DIR          Llamas_Commissioning_Data/20261014_15
 
 Images are written as JPEG (noise-like frames do not compress as PNG) into
 <out-dir>/images/, the document to <out-dir>/QA_EXAMPLES.md.
@@ -47,6 +48,7 @@ ZOOM_OVERRIDE = {
     "pass_dark_glow_2bgreen": "2.B.Green",
     "pass_dark_glow_multi": "1.A.Red",
     "warn_bias_fast_hotpixels": "2.A.Red",
+    "fail_bias_stripes_2bgreen": "2.B.Green",
 }
 
 # (slug, title, root key, relative path, previous verdict, explanation)
@@ -149,6 +151,13 @@ CASES = {
          "copies/LLAMAS_2026-06-04_20-36-33.1_CAL22_mef.fits", "FAIL (column_structure @ 2.B.Green)",
          "Full-height vertical bars across 2.B.Green, ~13 ADU peak to peak: an unambiguous "
          "electronic defect, several times the gross (4x) cap."),
+        ("fail_bias_stripes_2bgreen", "SLOW bias with row stripes on 2.B.Green (October 14)", "oct14",
+         "LLAMAS_2026-10-14_18-09-47.2_CAL24_mef.fits", "WARN (row_structure, level and edge @ 2.B.Green)",
+         "Random bright and dark rows across 2.B.Green, up to ~17 ADU off their neighbours: a "
+         "readout fault seen on 8 of the 11 SLOW biases that night. row_stripes (largest jump of "
+         "the per-row interquartile mean off its 15-row running median) reads 16.7 against a 2 ADU "
+         "cap; healthy SLOW biases read <= 0.34. The 667 ADU level is the detector's new normal "
+         "and no longer warns."),
         ("fail_arc_odd", "ThAr arc with odd structure on every detector (July 10)", "commissioning",
          "LLAMAS_2026-07-10_20-22-43.7_CAL22_mef.fits", "FAIL (column_structure on 22/22 detectors)",
          "Blooming/excess structure on every live detector relative to the fixed-lamp ThAr "
@@ -178,6 +187,7 @@ def parse_args():
     parser.add_argument("--commissioning-dir", default=os.environ.get("LLAMAS_QA_COMMISSIONING_DIR"))
     parser.add_argument("--sept06-dir", default=os.environ.get("LLAMAS_QA_SEPT06_DIR"))
     parser.add_argument("--sept07-dir", default=os.environ.get("LLAMAS_QA_SEPT07_DIR"))
+    parser.add_argument("--oct14-dir", default=os.environ.get("LLAMAS_QA_OCT14_DIR"))
     parser.add_argument("--out-dir", default=str(REPO_ROOT / "docs"),
                         help="where QA_EXAMPLES.md and images/ go (default: the repo docs/)")
     parser.add_argument("--jpeg-quality", type=int, default=80)
@@ -310,7 +320,8 @@ def header_info(path):
 def main():
     args = parse_args()
     roots = {"baselines": args.baselines_root, "warm": args.warm_dir,
-             "commissioning": args.commissioning_dir, "sept06": args.sept06_dir, "sept07": args.sept07_dir}
+             "commissioning": args.commissioning_dir, "sept06": args.sept06_dir, "sept07": args.sept07_dir,
+             "oct14": args.oct14_dir}
     out_dir = Path(args.out_dir); images_dir = out_dir / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
 

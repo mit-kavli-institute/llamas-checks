@@ -102,13 +102,36 @@ DEFAULT_MIN_SIGNAL = 2.0   # ADU; below this the ratio is noise and the rule SKI
 SMEAR_TYPES = ("vertical_smear",)
 DEFAULT_MIN_SIGNAL_SMEAR = 20.0
 DEFAULT_SMEAR_SMOOTH = 15   # columns; 1 disables the smoothing
+
+# Row stripes on a bias: a faulty readout (2.B.Green SLOW, 2026-10-14) adds random
+# bright or dark rows, each offset by a few to ~30 ADU over its whole length. The
+# metric is the largest deviation of the per-row profile from its running median
+# over DEFAULT_STRIPE_SMOOTH rows, so a smooth ramp or gradient (which row_structure
+# sees) drops out and a single offset row stands out. The profile is the
+# interquartile mean (DEFAULT_STRIPE_TRIM dropped from each end of the row): the
+# 2 %-trimmed structure profile is moved by rows with > 2 % hot pixels (800-1600
+# ADU on 4.A.Red FAST in October), and the per-row median is quantised to 1 ADU and
+# misses a 1 ADU stripe. Healthy SLOW biases read <= 0.34 ADU, striped ones 8-32.
+# The interquartile mean is a slice of the same sorted rows as row_structure, so
+# the rule costs no extra sort. The first and last DEFAULT_STRIPE_EDGE rows are
+# ignored: the bias ramps up over the first ~6 rows.
+STRIPE_TYPES = ("row_stripes",)
+DEFAULT_STRIPE_TRIM = 0.25
+DEFAULT_STRIPE_SMOOTH = 15  # rows
+DEFAULT_STRIPE_EDGE = 8     # rows ignored at each end
 # Metric types that need the line profiles of the region (shared per HDU).
-_PROFILE_TYPES = ("row_structure", "column_structure") + STRUCTURE_NORM_TYPES + SMEAR_TYPES
+_PROFILE_TYPES = (("row_structure", "column_structure") + STRUCTURE_NORM_TYPES + SMEAR_TYPES
+                  + STRIPE_TYPES)
+
+
+def _stripe_trim(metric: dict[str, Any]) -> float:
+    """Trim fraction of a row-stripe metric's interquartile-mean profile."""
+    return float(metric.get("trim", DEFAULT_STRIPE_TRIM))
 
 
 def _profile_axis(metric_type: str) -> int:
     """-1 collapses columns into a per-row profile; -2 collapses rows into a per-column profile."""
-    return -1 if metric_type.startswith("row_structure") else -2
+    return -1 if metric_type.startswith("row_structure") or metric_type in STRIPE_TYPES else -2
  
  
 @dataclass
@@ -149,13 +172,17 @@ class _ExtensionCache:
     metrics: dict[tuple[str, str], Any] = field(default_factory=dict)
     # region_name -> IntegerHistogram of that region (16-bit integer data only)
     histograms: dict[str, Any] = field(default_factory=dict)
-    # (region_name, axis) -> (trimmed-mean profile, median profile or None)
-    profiles: dict[tuple[str, int], tuple[Any, Any]] = field(default_factory=dict)
+    # (region_name, axis) -> (trimmed-mean profile, median profile or None,
+    #                         interquartile-mean profile or None)
+    profiles: dict[tuple[str, int], tuple[Any, Any, Any]] = field(default_factory=dict)
     # (region_name, background_region) -> lamp signal (region mean - background median)
     signals: dict[tuple[str, str], float] = field(default_factory=dict)
     # (region_name, axis) pairs a smear rule needs the median profile of, so the
     # one sort / partition of that axis also yields the median profile
     want_median: set[tuple[str, int]] = field(default_factory=set)
+    # (region_name, axis) -> trim fraction of the inner-trimmed profile a row-stripe
+    # rule needs, so the same sort also yields that profile
+    want_inner: dict[tuple[str, int], float] = field(default_factory=dict)
 
 
 @dataclass
@@ -477,6 +504,10 @@ class QAEngine:
                     # this axis is sorted once for all its profile metrics; the
                     # median profile is only formed where a smear rule reads it
                     entry.want_median.add((region_name, _profile_axis(metric_type)))
+                elif metric_type in STRIPE_TYPES:
+                    # likewise the interquartile-mean profile, sliced off the row sort
+                    entry.want_inner.setdefault((region_name, _profile_axis(metric_type)),
+                                                _stripe_trim(self.config["metrics"][rule["metric"]]))
 
         for metric_name, metric in self.config["metrics"].items():
             if metric.get("type") == "background_gradient_rate":
@@ -532,14 +563,23 @@ class QAEngine:
             if metric_type in _PROFILE_TYPES:
                 axis = _profile_axis(metric_type)
                 need_median = metric_type in SMEAR_TYPES or (region_name, axis) in entry.want_median
+                inner_trim = entry.want_inner.get((region_name, axis))
+                if inner_trim is None and metric_type in STRIPE_TYPES:
+                    inner_trim = _stripe_trim(metric)
                 profiles = entry.profiles.get((region_name, axis))
-                if profiles is None or (need_median and profiles[1] is None):
+                if (profiles is None or (need_median and profiles[1] is None)
+                        or (inner_trim is not None and profiles[2] is None)):
                     # module-level lookup so a test can count the sorts
-                    if need_median:
-                        profiles = line_profiles(region_data, axis)
+                    if inner_trim is not None:
+                        profiles = line_profiles(region_data, axis, median=need_median,
+                                                 inner_trim=inner_trim)
+                    elif need_median:
+                        profiles = line_profiles(region_data, axis) + (None,)
                     else:
-                        profiles = line_profiles(region_data, axis, median=False)
+                        profiles = line_profiles(region_data, axis, median=False) + (None,)
                     entry.profiles[(region_name, axis)] = profiles
+                if metric_type in STRIPE_TYPES and _stripe_trim(metric) != inner_trim:
+                    profiles = None   # a second stripe metric with another trim sorts its own
                 signal = None
                 if metric_type in STRUCTURE_NORM_TYPES or metric_type in SMEAR_TYPES:
                     # normalised metrics need the lamp signal; too faint -> SKIP this rule
@@ -1090,13 +1130,22 @@ class QAEngine:
             # vertical halo lifts them (see SMEAR_TYPES). The median profile is
             # smoothed with a running median first so a vertical line, which is
             # only a few columns wide, drops out while a halo survives.
+            # row_stripes is the largest jump of the interquartile-mean row profile
+            # off its running median (see STRIPE_TYPES).
             if raw.size == 0 or (raw.dtype.kind not in "iub" and not np.isfinite(raw).any()):
                 raise QAEngineError("metric cannot be computed because the selected "
                                     "region contains no finite pixels")
             is_smear = metric_type in SMEAR_TYPES
-            if profiles is None or (is_smear and profiles[1] is None):
-                profiles = line_profiles(raw, _profile_axis(metric_type), median=is_smear)
-            trimmed, median = profiles
+            is_stripe = metric_type in STRIPE_TYPES
+            if (profiles is None or (is_smear and profiles[1] is None)
+                    or (is_stripe and (len(profiles) < 3 or profiles[2] is None))):
+                profiles = line_profiles(raw, _profile_axis(metric_type), median=is_smear,
+                                         inner_trim=_stripe_trim(metric) if is_stripe else None)
+            if is_stripe:
+                return stripe_deviation(profiles[2],
+                                        int(metric.get("smooth_rows", DEFAULT_STRIPE_SMOOTH)),
+                                        int(metric.get("edge_rows", DEFAULT_STRIPE_EDGE)))
+            trimmed, median = profiles[0], profiles[1]
             if is_smear:
                 profile = running_median(median, int(metric.get("smooth_columns",
                                                                  DEFAULT_SMEAR_SMOOTH)))
@@ -1385,7 +1434,7 @@ def integer_mad(values: Any) -> float:
 
 
 def line_profiles(values: Any, axis: int, trim: float = STRUCTURE_TRIM_FRACTION,
-                  median: bool = True) -> tuple[Any, Any]:
+                  median: bool = True, inner_trim: float | None = None) -> tuple[Any, ...]:
     """``(trimmed_mean, median)`` of every line along ``axis`` from ONE sort or partition.
 
     The trimmed mean drops the lowest/highest ``trim`` fraction of each line (at
@@ -1397,8 +1446,8 @@ def line_profiles(values: Any, axis: int, trim: float = STRUCTURE_TRIM_FRACTION,
     Integer input (raw frames are uint16) is sorted natively: numpy's 16-bit sort
     is faster than even a two-pivot ``np.partition`` on these frames (8-17 ms
     against 20-32 ms per 4-Mpix detector and axis, numpy 2.2), and one sort yields both
-    the trimmed mean and the median. Its mean is accumulated in float64, which is
-    exact for integers, so the profile does not depend on the pixel order. Float
+    the trimmed mean and the median. Its mean is an exact 64-bit integer sum divided
+    by the count, so the profile does not depend on the pixel order. Float
     input is promoted to float64 and uses a multi-pivot ``np.partition``: once the
     k-th and (n-k-1)-th order statistics are in place, everything between them is
     exactly the untrimmed set; the middle one or two ranks are added as pivots when
@@ -1406,6 +1455,11 @@ def line_profiles(values: Any, axis: int, trim: float = STRUCTURE_TRIM_FRACTION,
     nanmean; when a NaN is present the median is taken with ``np.nanmedian``. A
     2-D column profile is taken on a contiguous transpose, which is much faster
     than sorting or partitioning along a strided axis.
+
+    With ``inner_trim`` (e.g. 0.25 for the interquartile mean of the row-stripe
+    metric) a third profile, the mean after dropping that fraction from each end,
+    is returned: ``(trimmed_mean, median, inner_mean)``. It is a second slice of
+    the same sorted lines (float input: two more partition pivots), never a second sort.
     """
     array = np.asarray(values)
     integer = array.dtype.kind in "iu"
@@ -1420,37 +1474,65 @@ def line_profiles(values: Any, axis: int, trim: float = STRUCTURE_TRIM_FRACTION,
     trimmable = n > 2 * k      # otherwise nothing is left after trimming
     has_nan = not integer and bool(np.isnan(array).any())
     middle = [n // 2] if n % 2 else [n // 2 - 1, n // 2]
+    if inner_trim is not None:
+        ki = max(1, int(n * inner_trim))
+        inner_trimmable = n > 2 * ki
     if integer:
         partitioned = np.sort(array, axis=axis)
     else:
         kth: set[int] = {k, n - k - 1} if trimmable else set()
         if median and not has_nan and n > 0:
             kth.update(middle)
+        if inner_trim is not None and inner_trimmable:
+            kth.update((ki, n - ki - 1))
         partitioned = np.partition(array, sorted(kth), axis=axis) if kth else array
     line_shape = array.shape[:axis] + array.shape[axis + 1:]
 
-    if trimmable:
+    def sliced_mean(lo: int, ok: bool) -> Any:
+        if not ok:      # every line is undefined
+            return np.full(line_shape, np.nan)
         index = [slice(None)] * array.ndim
-        index[axis] = slice(k, n - k)
-        trimmed = np.nanmean(partitioned[tuple(index)], axis=axis)
-    else:      # every line is undefined
-        trimmed = np.full(line_shape, np.nan)
+        index[axis] = slice(lo, n - lo)
+        if integer:
+            # exact 64-bit integer sum: ~2.5x faster than a float64 mean, same value
+            total = partitioned[tuple(index)].sum(
+                axis=axis, dtype=np.int64 if array.dtype.kind == "i" else np.uint64)
+            return total / float(n - 2 * lo)
+        return np.nanmean(partitioned[tuple(index)], axis=axis)
+
+    trimmed = sliced_mean(k, trimmable)
+    extra = () if inner_trim is None else (sliced_mean(ki, inner_trimmable),)
 
     if not median:
-        return trimmed, None
+        return (trimmed, None) + extra
     if has_nan or n == 0:
         with np.errstate(all="ignore"):
-            return trimmed, np.nanmedian(array, axis=axis)
+            return (trimmed, np.nanmedian(array, axis=axis)) + extra
     upper = np.take(partitioned, middle[-1], axis=axis).astype(np.float64)
     if n % 2 == 0:
         upper = (upper + np.take(partitioned, middle[0], axis=axis)) / 2.0
-    return trimmed, upper
+    return (trimmed, upper) + extra
 
 
 def trimmed_mean_profile(values: Any, axis: int, trim: float = STRUCTURE_TRIM_FRACTION) -> Any:
     """Mean along ``axis`` after dropping the lowest/highest ``trim`` fraction of each line
     (the first element of ``line_profiles``, without the median pivots)."""
     return line_profiles(values, axis, trim, median=False)[0]
+
+
+def stripe_deviation(profile: Any, smooth: int = DEFAULT_STRIPE_SMOOTH,
+                     edge: int = DEFAULT_STRIPE_EDGE) -> float:
+    """Largest ``|profile - running_median(profile, smooth)|`` over the finite
+    samples of ``profile[edge:-edge]``: the row-stripe metric (see STRIPE_TYPES).
+    A smooth ramp or gradient follows its running median and gives ~0; one row
+    offset from its neighbours gives the offset."""
+    values = np.asarray(profile, dtype=np.float64).ravel()
+    edge = max(0, int(edge))
+    values = values[edge:values.size - edge]
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        raise QAEngineError("row_stripes metric has no finite rows inside the edge margin")
+    return float(np.max(np.abs(values - running_median(values, smooth))))
 
 
 def running_median(profile: Any, width: int) -> Any:

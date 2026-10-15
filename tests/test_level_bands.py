@@ -1,6 +1,7 @@
 """Level / edge-background bands (range + drift margin) and the per-field colour
 fallback of gen_configs, plus guards on the shipped config after the 2026-10-14
-level-only epoch was added (1.A.Blue / 4.A.Blue bands, frozen 2.B.Green SLOW)."""
+level-only epoch was added (1.A.Blue / 4.A.Blue bands; 2.B.Green SLOW, frozen at
+its legacy band until 2026-10-15, now on the range + margin band like the rest)."""
 import json
 
 import numpy as np
@@ -40,9 +41,12 @@ def test_level_band_contains_legacy_band_on_bimodal_sample():
     assert lo <= a.min() - 30 and hi >= a.max() + 30
 
 
-def test_band_for_dispatches_legacy_detectors():
+def test_band_for_dispatches_legacy_detectors(monkeypatch):
     a = np.array([630.0, 631.0, 632.0])
-    assert ("2.B.Green", "SLOW") in agg.LEGACY_BAND_DETECTORS
+    assert agg.LEGACY_BAND_DETECTORS == set()          # 2.B.Green SLOW unfrozen 2026-10-15
+    assert agg.band_for("2.B.Green", "SLOW", a) == agg.level_band(a)
+    # the mechanism is kept for the next detector that needs freezing
+    monkeypatch.setattr(agg, "LEGACY_BAND_DETECTORS", {("2.B.Green", "SLOW")})
     assert agg.band_for("2.B.Green", "SLOW", a) == agg.legacy_level_band(a)
     assert agg.band_for("2.B.Green", "FAST", a) == agg.level_band(a)
     assert agg.band_for("1.A.Red", "SLOW", a) == agg.level_band(a)
@@ -126,14 +130,18 @@ def test_placeholder_blue_bias_bands_contain_october_level(cal, det, mode, oct_m
     assert eb["min"] < oct_med < eb["max"]
 
 
-def test_frozen_detector_keeps_legacy_bias_band(cal, derived):
+def test_unfrozen_detector_band_covers_october_level(cal, derived):
+    """2.B.Green SLOW biases sit at ~667 ADU since 2026-10-14 (the new normal): the
+    band must hold that level plus the 30 ADU drift margin, and no frame type keeps
+    the legacy band."""
     lt = cal["lookup_tables"]
     lv = lt["level_BIAS"]["2.B.Green"]["SLOW"]
-    assert (lv["med_min"], lv["med_max"]) == (615.5, 645.5)
-    assert lt["edge_bg_BIAS"]["2.B.Green"]["SLOW"] == {"min": 616.5, "max": 646.5}
+    assert lv["med_max"] >= 667 + 30 and lv["med_min"] <= 629 - 30
+    assert lt["edge_bg_BIAS"]["2.B.Green"]["SLOW"]["max"] >= 671 + 30
     for pc, per_mode in derived["per_detector"].items():
         if "2.B.Green" in per_mode.get("SLOW", {}):
-            assert per_mode["SLOW"]["2.B.Green"]["band"] == "legacy", pc
+            assert per_mode["SLOW"]["2.B.Green"]["band"] == "range+margin", pc
+    assert derived["meta"]["legacy_band_detectors"] == []
 
 
 def _blue_median(derived, pc, mode, getter):
@@ -186,12 +194,12 @@ def test_october_records_inside_their_bands(cal, raw):
     assert checked > 800
 
 
-def test_held_out_frozen_october_biases_lie_outside(cal, raw):
+def test_unfrozen_october_biases_lie_inside(cal, raw):
     lv = cal["lookup_tables"]["level_BIAS"]["2.B.Green"]["SLOW"]
-    held = [r for r in raw if r["date"] == OCT and r["prodcatg"] == "CAL.R-BIA"
-            and r["mode"] == "SLOW" and _det(r) == "2.B.Green" and not r.get("placeholder")]
-    assert held
-    assert all(not (lv["med_min"] <= r["full_med"] <= lv["med_max"]) for r in held)
+    oct_recs = [r for r in raw if r["date"] == OCT and r["prodcatg"] == "CAL.R-BIA"
+                and r["mode"] == "SLOW" and _det(r) == "2.B.Green" and not r.get("placeholder")]
+    assert len(oct_recs) == 11
+    assert all(lv["med_min"] <= r["full_med"] <= lv["med_max"] for r in oct_recs)
 
 
 def test_october_epoch_does_not_move_shutter_or_meta(cal, derived):

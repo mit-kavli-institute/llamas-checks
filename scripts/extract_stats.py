@@ -13,7 +13,9 @@ the std of the per-row / per-column MEDIAN profiles from the same sort, and
 col_med_smooth_std the same after the engine's running median over
 DEFAULT_SMEAR_SMOOTH columns (the vertical-smear metric on arcs is
 col_med_smooth_std / (full_mean - edge_med)); full_std is the robust 1.4826*MAD
-sigma (full_std_plain = np.std).
+sigma (full_std_plain = np.std). row_stripe is the bias row-stripe metric
+(qa_engine.stripe_deviation of the per-row interquartile-mean profile, the third
+profile of the same line_profiles sort).
 Placeholder/missing extensions (constant-valued frames) are recorded with
 placeholder=True and no statistics.
 
@@ -34,7 +36,8 @@ import sys
 import numpy as np
 from astropy.io import fits
 
-from llamas_checks.qa_engine import DEFAULT_SMEAR_SMOOTH, line_profiles, running_median
+from llamas_checks.qa_engine import (DEFAULT_SMEAR_SMOOTH, DEFAULT_STRIPE_TRIM, line_profiles,
+                                     running_median, stripe_deviation)
 
 SAT = 63000.0
 BOT = (slice(2, 28), slice(100, 1948))       # (y, x)
@@ -81,7 +84,8 @@ def extract_file(path):
                 # Engine definitions: structure = std of the per-row/column 2 %-trimmed
                 # means, rms = 1.4826*MAD (both immune to hot pixels / cosmic rays);
                 # *_med_std = std of the per-line medians from the same sort (smear).
-                rowprof, rowmed = line_profiles(v, axis=1)   # collapse X -> profiles over rows
+                # collapse X -> profiles over rows (+ the interquartile mean for row stripes)
+                rowprof, rowmed, rowiqm = line_profiles(v, axis=1, inner_trim=DEFAULT_STRIPE_TRIM)
                 colprof, colmed = line_profiles(v, axis=0)   # collapse Y -> profiles over cols
                 full_med = float(np.nanmedian(v))
                 rec.update(
@@ -106,6 +110,8 @@ def extract_file(path):
                     col_med_smooth_std=float(np.nanstd(
                         running_median(np.nan_to_num(colmed, nan=np.nanmedian(colmed)),
                                        DEFAULT_SMEAR_SMOOTH))),
+                    # largest single-row jump off the running median (bias row stripes)
+                    row_stripe=stripe_deviation(rowiqm),
                 )
                 recs.append(rec)
     except Exception as exc:

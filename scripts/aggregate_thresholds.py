@@ -48,8 +48,12 @@ LEVEL_ONLY_EPOCHS = {"2026-10-14"}
 EXCLUDED_RECORDS = {("2026-10-14", "CAL.R-FLT")}
 # (detector, readout mode) pairs that keep the legacy band formula and whose
 # level-only-epoch records are held out of every derivation (tracking CSV only).
-# 2.B.Green SLOW is known-bad in 2026-10 (+36 ADU) and keeps its thresholds frozen.
-LEGACY_BAND_DETECTORS = {("2.B.Green", "SLOW")}
+# Empty since 2026-10-15: 2.B.Green SLOW was frozen when its October level (~667,
+# +36 ADU) looked like a fault, but that level is the new normal (clean frames of
+# the same night sit there too); its October records now feed its level and edge
+# bands like every other detector. The row stripes it also showed are caught by
+# the row_stripes FAIL check instead.
+LEGACY_BAND_DETECTORS = set()
 
 # absolute ADU floors (additive pedestals) and robust widths
 K_LEVEL = 6          # band half-width in robust sigmas for level/background
@@ -59,6 +63,11 @@ N_CAP = 8            # one-sided caps in robust sigmas
 FLOOR_STRUCT = 2.0   # min structure cap
 FLOOR_RMS = 5.0      # min rms cap, ADU
 FLOOR_SAT = 0.0005   # min saturation-fraction cap
+# Bias row stripes (qa_engine.stripe_deviation): largest jump of a row's
+# interquartile mean off its 15-row running median. Healthy SLOW biases read
+# <= 0.34 ADU and FAST ~0.7 (4.A.Red FAST up to ~18 from hot rows); the striped
+# 2.B.Green SLOW biases of 2026-10-14 read 8-32. BIAS frames only.
+FLOOR_STRIPE = 2.0   # min row-stripe cap, ADU
 
 # Signal-normalised structure (structure / (full_mean - edge_med)) for lamp frames
 # whose structure IS the lamp pattern and scales with exposure: the absolute caps
@@ -279,6 +288,7 @@ def main():
         col_v = [r["col_struct"] for r in vs]
         rms_v = [r["full_std"] for r in vs]
         sat_v = [r["sat_frac"] for r in vs]
+        stripe_v = [r["row_stripe"] for r in vs if r.get("row_stripe") is not None]
         if edge_a.size == 0:
             continue
         emin, emax = band_for(det, mode, edge_a)
@@ -298,9 +308,15 @@ def main():
                           "observed_row": obs_stats(np.asarray(row_v, float)),
                           "observed_col": obs_stats(np.asarray(col_v, float))},
             "structure_norm": normalised_structure(norm_src),
-            "smear": vertical_smear(norm_src),
+            # arcs only (the smear rule's frame type); re-extracted bias records also
+            # carry col_med_smooth_std, and a bias has no lamp to smear
+            "smear": vertical_smear(norm_src) if pc in POOL_MODES_FOR_NORM else None,
             "sat_frac_max": heavy_tail_cap(sat_v, FLOOR_SAT),
         }
+        if pc == "CAL.R-BIA":
+            derived[pc][mode][det]["stripe"] = {
+                "row_fail_max": heavy_tail_cap(stripe_v, FLOOR_STRIPE),
+                "observed": obs_stats(np.asarray(stripe_v, float))}
 
     # tracking: every healthy record plus the held-out ones (the drift record is
     # where a frozen detector's excursion belongs)
@@ -379,11 +395,12 @@ def main():
                     "excluded_records": [list(x) for x in sorted(EXCLUDED_RECORDS)],
                     "legacy_band_detectors": [list(x) for x in sorted(LEGACY_BAND_DETECTORS)],
                     "robustness": f"level/edge band = observed range over all healthy epochs "
-                                  f"+/- max({K_LEVEL}sig,{DRIFT_MARGIN_ADU:g}ADU) "
-                                  f"(legacy median +/- max({K_LEVEL}sig,{FLOOR_LEVEL:g}ADU) for "
-                                  f"{', '.join(f'{d} {m}' for d, m in sorted(LEGACY_BAND_DETECTORS))}, "
-                                  f"whose {', '.join(sorted(LEVEL_ONLY_EPOCHS))} records are held out); "
-                                  f"structure/rms/saturation caps max(1.5 x max, med+{N_CAP}sig, floor) "
+                                  f"+/- max({K_LEVEL}sig,{DRIFT_MARGIN_ADU:g}ADU)"
+                                  + (f" (legacy median +/- max({K_LEVEL}sig,{FLOOR_LEVEL:g}ADU) for "
+                                     f"{', '.join(f'{d} {m}' for d, m in sorted(LEGACY_BAND_DETECTORS))}, "
+                                     f"whose {', '.join(sorted(LEVEL_ONLY_EPOCHS))} records are held out); "
+                                     if LEGACY_BAND_DETECTORS else "; ")
+                                  + f"structure/rms/saturation caps max(1.5 x max, med+{N_CAP}sig, floor) "
                                   f"from the vetted epochs only (level-only: "
                                   f"{', '.join(sorted(LEVEL_ONLY_EPOCHS))})",
                     "region_convention": "edge stripes y[2:28]&[2020:2046] x[100:1948]; sat>63000",
@@ -394,7 +411,10 @@ def main():
                              f"profile after a {SMEAR_SMOOTH_COLUMNS}-column running median, over the lamp "
                              f"signal), cap max(med+{N_CAP}sig, 1.5 x p95), records with signal < "
                              f"{MIN_SIGNAL_SMEAR} ADU or without the statistic excluded; FAST+SLOW pooled "
-                             f"for {', '.join(POOL_MODES_FOR_NORM)}"},
+                             f"for {', '.join(POOL_MODES_FOR_NORM)}",
+                    "stripe": f"BIAS only: row_fail_max = heavy-tail cap (floor {FLOOR_STRIPE:g} ADU) of "
+                              f"row_stripe, the largest |interquartile-mean row profile - its 15-row "
+                              f"running median| over rows 8..n-9, from the vetted epochs"},
            "per_detector": derived, "shutter": shutter, "ccd_temp": ccd}
     json.dump(out, open(OUT_JSON, "w"), indent=1)
     with open(OUT_CSV, "w", newline="") as fh:
@@ -438,6 +458,21 @@ def main():
         if not (eb["min"] <= r["edge_med"] <= eb["max"]) or not (fl["med_min"] <= r["full_med"] <= fl["med_max"]):
             held_breach += 1
     print(f"  held-out records breaching edge or level band: {held_breach} / {len(heldout)}")
+    print("\n=== row-stripe caps (BIAS) and vetted bias records above them (should be none) ===")
+    for mode, dets in sorted(derived.get("CAL.R-BIA", {}).items()):
+        caps = {det: e["stripe"]["row_fail_max"] for det, e in dets.items() if e.get("stripe")}
+        wide = {det: float(cap) for det, cap in caps.items() if cap is not None and cap > FLOOR_STRIPE}
+        print(f"  {mode}: {len(caps)} detectors, cap {FLOOR_STRIPE:g} ADU except {wide or 'none'}")
+    stripe_breaches = []
+    for r in vetted:
+        if r["prodcatg"] != "CAL.R-BIA" or r.get("row_stripe") is None:
+            continue
+        cap = derived["CAL.R-BIA"][r["mode"]][det_name(r)]["stripe"]["row_fail_max"]
+        if cap is not None and r["row_stripe"] > cap:
+            stripe_breaches.append((r["filename"], det_name(r), round(r["row_stripe"], 2), float(cap)))
+    print(f"  vetted bias records above their row-stripe cap: {len(stripe_breaches)}")
+    for b in stripe_breaches:
+        print("    ", b)
     smear_breaches = []
     for r in normal:
         ent = derived.get(r["prodcatg"], {}).get(r["mode"], {}).get(det_name(r))

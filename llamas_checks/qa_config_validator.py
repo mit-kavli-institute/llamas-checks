@@ -73,6 +73,7 @@ class QAConfigValidator:
         "row_structure_norm",
         "column_structure_norm",
         "vertical_smear",
+        "row_stripes",
         "background_gradient_rate",
     }
     SEVERITIES = {"PASS", "WARN", "FAIL"}
@@ -280,6 +281,21 @@ class QAConfigValidator:
                 if sc is not None and not (isinstance(sc, int) and not isinstance(sc, bool)
                                            and sc >= 1):
                     self.add_error(f"{path}.smooth_columns", "must be a positive integer")
+            if mtype == "row_stripes":
+                # optional: fraction trimmed from each end of a row for the profile,
+                # running-median width (rows) and rows ignored at each end
+                allowed.update({"trim", "smooth_rows", "edge_rows"})
+                trim = metric.get("trim")
+                if trim is not None and not (self.is_number(trim) and 0 < float(trim) < 0.5):
+                    self.add_error(f"{path}.trim", "must be a number with 0 < trim < 0.5")
+                sr = metric.get("smooth_rows")
+                if sr is not None and not (isinstance(sr, int) and not isinstance(sr, bool)
+                                           and sr >= 3 and sr % 2 == 1):
+                    self.add_error(f"{path}.smooth_rows", "must be an odd integer >= 3")
+                er = metric.get("edge_rows")
+                if er is not None and not (isinstance(er, int) and not isinstance(er, bool)
+                                           and er >= 0):
+                    self.add_error(f"{path}.edge_rows", "must be a non-negative integer")
             for field, value in metric.items():
                 if field not in allowed:
                     self.add_error(f"{path}.{field}", "unknown field for this metric type")

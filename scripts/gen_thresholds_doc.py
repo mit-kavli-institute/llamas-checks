@@ -62,6 +62,12 @@ def cal_type_section(name, prodcatg, has_level, detectors, tables, derived, norm
                 "vertical lines do not), FAIL above the cap, SKIPPED below 20 ADU of signal.", ""]
     edge, struct, sat = tables[f"edge_bg_{name}"], tables[f"struct_{name}"], tables[f"sat_{name}"]
     smear = tables.get(f"smear_{name}") if normalised else None
+    stripe = tables.get(f"stripe_{name}")
+    if stripe is not None:
+        out += ["**Row stripes** (FAIL): the largest jump of the per-row interquartile mean (25 % "
+                "trimmed from each end of the row) off its 15-row running median, ignoring 8 rows at "
+                "each end. A smooth ramp or gradient follows the running median; a single bright or "
+                "dark row does not. Cap = 1.5 x the largest vetted value, floor 2 ADU.", ""]
     level = tables.get(f"level_{name}") if has_level else None
     n_files = {}
     for mode, per_det in derived["per_detector"][prodcatg].items():
@@ -78,6 +84,8 @@ def cal_type_section(name, prodcatg, has_level, detectors, tables, derived, norm
             header += ["row FAIL max (4x)", "col FAIL max (4x)"]
         if smear is not None:
             header += ["vertical smear max"]
+        if stripe is not None:
+            header += ["row stripes FAIL max"]
         header += ["sat frac max"]
         rows = []
         for det in detectors:
@@ -95,6 +103,9 @@ def cal_type_section(name, prodcatg, has_level, detectors, tables, derived, norm
             if smear is not None:
                 sm = smear.get(det, {}).get(mode)
                 row += [sm and sm["max"]]
+            if stripe is not None:
+                sp = stripe.get(det, {}).get(mode)
+                row += [sp and sp["row_fail_max"]]
             row += [f and f["frac_max"]]
             rows.append(row)
         out += [f"### {name} — readout mode {mode}", "", table(header, rows), ""]
