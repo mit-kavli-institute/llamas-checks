@@ -464,7 +464,29 @@ python scripts/gen_examples_doc.py               # -> docs/QA_EXAMPLES.md + docs
 The raw per-extension statistics are committed (`llamas_checks/baselines/qa_stats_raw.json`), so
 everything from `aggregate_thresholds.py` onwards can be reproduced without the baseline frames.
 
+To add a night as a new baseline epoch without re-extracting the old ones, merge its frames into
+the committed statistics and re-run from `aggregate_thresholds.py` onwards:
+
+```bash
+python scripts/extract_stats.py --update llamas_checks/baselines/qa_stats_raw.json \
+    --files "/path/to/night/LLAMAS_2026-10-14_*_mef.fits" --jobs 6
+```
+
+How an epoch is used is registered at the top of `scripts/aggregate_thresholds.py` (records are
+keyed by their DATE-OBS `date`):
+
+- `LEVEL_ONLY_EPOCHS`: epochs that feed only the edge-background / level bands and the tracking
+  CSV, not the structure, rms, saturation or smear caps nor the shutter and temperature
+  tolerances (2026-10-14 is level-only).
+- `EXCLUDED_RECORDS`: `(date, PRODCATG)` sets dropped from every derivation (the saturated
+  2026-10-14 LDLS flats).
+- `LEGACY_BAND_DETECTORS`: `(detector, mode)` pairs that keep the legacy band
+  `median ± max(6σ, 15 ADU)` and whose level-only records are held out (2.B.Green SLOW, known-bad
+  in October). Every other band is the observed range over all healthy epochs widened by
+  `max(6σ, DRIFT_MARGIN_ADU)` (30 ADU).
+
 `aggregate_thresholds.py` prints its self-checks (band breaches among normal frames, the held-out
+level-only records of the frozen detectors against their legacy band, the held-out
 June-2026 odd dark against the dark structure caps, and — when `--warm-dir` is set — the warm
 folder against the shutter, edge-background and temperature limits). `extract_stats.py --out`,
 `aggregate_thresholds.py --raw/--out-dir` and `gen_configs.py --derived/--out-dir` let you keep

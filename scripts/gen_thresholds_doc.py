@@ -66,9 +66,10 @@ def cal_type_section(name, prodcatg, has_level, detectors, tables, derived, norm
     n_files = {}
     for mode, per_det in derived["per_detector"][prodcatg].items():
         for det, entry in per_det.items():
-            n_files[(det, mode)] = entry.get("n_files")
+            n, nv = entry.get("n_files"), entry.get("n_vetted")
+            n_files[(det, mode)] = f"{n} / {nv}" if nv is not None else n
     for mode in modes_in(edge):
-        header = ["detector", "n baseline", "edge-bg min", "edge-bg max"]
+        header = ["detector", "n baseline (level / vetted)", "edge-bg min", "edge-bg max"]
         if level:
             header += ["level min", "level max", "rms (robust) max"]
         header += (["row max (÷ signal)", "col max (÷ signal)"] if normalised
@@ -175,6 +176,9 @@ def main() -> int:
     detectors = [e["name"] for e in cal["extensions"]]
     tables = cal["lookup_tables"]
     meta = derived["meta"]
+    level_only = ", ".join(meta.get("level_only_epochs", [])) or "none"
+    excluded = ", ".join(f"{d} {pc}" for d, pc in meta.get("excluded_records", [])) or "none"
+    frozen = ", ".join(f"{d} {m}" for d, m in meta.get("legacy_band_detectors", [])) or "none"
 
     doc = [
         "# LLAMAS QA thresholds — per-detector tables",
@@ -184,7 +188,14 @@ def main() -> int:
         "> re-run the script after `gen_configs.py`.",
         "",
         f"Baseline epochs: {', '.join(meta['epochs'])}; {meta['n_normal_records']} normal detector-frame records; "
-        f"held out: {meta['excluded_odd']}. Method: {meta['robustness']}. Regions: {meta['region_convention']}.",
+        f"held out: {meta['excluded_odd']}. Level-only epochs (edge/level bands and tracking only, not "
+        f"structure / rms / saturation / smear caps, shutter or temperature): {level_only}; "
+        f"{meta.get('n_vetted_records', meta['n_normal_records'])} vetted records feed the caps. "
+        f"Excluded entirely: {excluded}. Frozen at the legacy band (level-only records held out): {frozen}. "
+        f"Method: {meta['robustness']}. Regions: {meta['region_convention']}. "
+        "The n column gives the level-band sample / the vetted sample; a detector with 0 vetted records "
+        "takes its structure, rms, saturation and smear caps from the median of the other cameras of its "
+        "colour.",
         "",
         "Units: ADU for levels, RMS and structure metrics; fraction of pixels for saturation; °C for temperature; "
         "seconds for shutter tolerances. Level and edge-background limits are a min–max band (WARN outside); "

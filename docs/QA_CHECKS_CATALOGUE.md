@@ -198,7 +198,7 @@ caught by the gradient *rate*, because dark current accrues per second while sky
 | structure cap floor | 2.0 ADU | all cal types |
 | RMS cap floor | 5.0 ADU | BIAS, DARK |
 | saturation cap floor | 5 × 10⁻⁴ | all cal types |
-| level band floor | ± 15 ADU | BIAS, DARK, edge stripes |
+| level band drift margin | observed range ± max(6 σ, 30 ADU); 2.B.Green SLOW keeps median ± max(6 σ, 15 ADU) | BIAS, DARK, edge stripes |
 
 Per-camera temperature limits span a 26 °C range: 1.A.Red has a healthy baseline of −78.3 °C
 (WARN above −68.3, FAIL above −62.3) while 1.A.Green sits at −104.7 °C (WARN above −96.7, FAIL
@@ -210,7 +210,11 @@ blue; the full table is in the appendix.
 Inputs: **153 baseline calibration frames** from three epochs, 2026-04-07, 2026-05-02 and
 2026-06-30, in Box `LLAMAS_analysis/QA_baselines/` (sorted into `Bias/`, `Darks/`, `Arcs/`,
 `lamp_flats/`, `twilight_flats/`, each with a `manifest.csv`). The known-bad 2026-06-04 dark was
-held out for validation. The bias subset is 48 frames:
+held out for validation. A fourth, **level-only** epoch, 2026-10-14
+(`Llamas_Commissioning_Data/20261014_15`: 22 biases, 12 arcs, 4 darks, 1 sky flat; the 12
+saturated LDLS flats are excluded), feeds only the level and edge-background bands and the
+tracking CSV. It adds the first real frames of 1.A.Blue and 4.A.Blue and the April–October level
+drift (up to +70 ADU on 3.A.Green SLOW). The bias subset of the three vetted epochs is 48 frames:
 
 | date | FAST | SLOW |
 |---|---|---|
@@ -224,8 +228,13 @@ are committed as `llamas_checks/baselines/qa_stats_raw.json`, so everything belo
 without the frames):
 
 - Samples are **MAD sigma-clipped** first, so an anomalous baseline frame cannot inflate its own cap.
-- Level and edge-background bands: `median ± max(6 σ_robust, 15 ADU)` — an absolute ADU floor.
-- RMS cap: `max(median + 8 σ_robust, 3 × median, 5.0)` on the robust rms; caps are now read-noise
+- Level and edge-background bands: the observed range over all four epochs widened by
+  `max(6 σ_robust, 30 ADU)`. 2.B.Green SLOW, known-bad in October (+36 ADU), keeps the legacy
+  `median ± max(6 σ_robust, 15 ADU)` band and its October records are held out.
+- Structure, rms, saturation and smear caps, shutter and temperature tolerances come from the three
+  vetted epochs only. 1.A.Blue and 4.A.Blue, which have no vetted record, take those caps from the
+  median of the other blue cameras.
+- RMS cap: heavy-tail `max(1.5 × max, median + 8 σ_robust, 5.0)` on the robust rms; caps are now read-noise
   level (5 ADU on most SLOW detectors, 11–13 ADU FAST, 74 ADU on 4.A.Red FAST) instead of the
   25–3800 ADU plain-std caps that hot pixels used to inflate.
 - Row/column structure and saturation caps are **heavy-tail**: `max(1.5 × unscreened max, median + 8 σ_robust, floor)`
@@ -236,8 +245,10 @@ without the frames):
   relative tolerance fixed at 10 %. The 0.30 s overrun of the 2026-05-02 LDLS flat was clipped as an
   outlier, which is why that frame fails its own type's 0.252 s tolerance (§6.1).
 
-Self-check on the baselines themselves: 0.75 % of normal detector-frames (25 of 3344) sit outside
-their edge-background band (WARN-level drift); the held-out June-4 dark trips the DARK/SLOW
+Self-check on the baselines themselves: none of the 4262 normal detector-frame records sits outside
+a range + margin edge-background band; 5 records of the frozen 2.B.Green SLOW (2026-05-02 and
+06-30 sky flats) sit outside its legacy band, and all 18 held-out October 2.B.Green SLOW records
+breach it; the held-out June-4 dark trips the DARK/SLOW
 structure caps on 2.B.Green (row 6.7 vs 2.19, column 13.3 vs 2.0, i.e. 6.6 × the cap).
 
 Pipeline: `scripts/sort_baselines.py` → `scripts/extract_stats.py` → `scripts/aggregate_thresholds.py`

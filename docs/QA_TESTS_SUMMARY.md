@@ -302,19 +302,32 @@ never failed.
 ## Threshold provenance & tracking
 
 Derived from **153 baseline cal files** over **2026-04-07, 2026-05-02, 2026-06-30** (the
-known-bad June-4 odd dark held out for validation). Methodology (robust):
+known-bad June-4 odd dark held out for validation), plus **2026-10-14 as a level-only epoch**
+(22 biases, 12 arcs, 4 darks and 1 sky flat; its 12 saturated LDLS flats are excluded). The
+level-only epoch feeds the edge-background / level bands and the tracking CSV only; structure,
+rms, saturation and smear caps, shutter and temperature tolerances come from the three vetted
+epochs (3344 records; 918 level-only records added to the bands). Methodology (robust):
 - Per (type × mode × detector) samples are **MAD sigma-clipped** to reject anomalous baseline
   frames *before* deriving limits (so an outlier can't inflate its own cap).
-- Background/level bands are additive: `median ± max(6σ_robust, 15 ADU)` — an **absolute** ADU
-  floor, not a percentage.
-- Structure/RMS/saturation caps are robust one-sided: `max(median + 8σ_robust, 3×median,
+- Background/level bands are additive and span the **observed range over all healthy epochs**
+  plus a drift margin: `[min − h, max + h]`, `h = max(6σ_robust, 30 ADU)` (`DRIFT_MARGIN_ADU`).
+  Levels drifted 15–70 ADU between April–June and October while the within-night spread is 0–5
+  ADU, so the old `median ± max(6σ, 15 ADU)` band warned on healthy October biases.
+- **2.B.Green SLOW is frozen**: it was +36 ADU in October and is known-bad there, so its October
+  records are held out of every derivation (they appear only in the tracking CSV) and it keeps the
+  legacy band `median ± max(6σ, 15 ADU)` (BIAS level 615.5–645.5, edge 616.5–646.5 ADU).
+- 1.A.Blue and 4.A.Blue have their own bands from October (they were placeholders in every
+  earlier epoch); with no vetted record their structure, rms, saturation and smear caps are the
+  median of the other blue cameras.
+- Structure/RMS/saturation caps are heavy-tail one-sided: `max(1.5 × max, median + 8σ_robust,
   floor)`.
 - **CCD temperature is per camera**: each detector's own healthy median (within-camera
   sigma-clipped) plus a colour-aware warm margin (red +10/+16 °C, green/blue +8/+15 °C). Pooling
   all cameras would hide the warm-running detectors — 1A.red at −78 °C sits 12 °C above the −90 °C
   array median, so the legacy pooled threshold clipped it away as an "outlier."
-- Self-check: 2.7% of normal detector-frames breach their edge-background band (WARN-level
-  drift), 0 breach at FAIL severity.
+- Self-check: 0 normal detector-frames breach a range + margin edge-background band (by
+  construction); 5 records of the frozen 2.B.Green SLOW (2026-05-02 / 06-30 sky flats) sit outside
+  its legacy band, and all 18 held-out October 2.B.Green SLOW records breach it.
 
 Artifacts (`llamas_checks/baselines/`): `qa_thresholds_derived.json` (limits + observed stats)
 and `qa_tracking_baselines.csv` (per-epoch medians for **drift monitoring**); the reproducible
@@ -345,13 +358,14 @@ YAMLs are generated, so edit `scripts/gen_configs.py` (or the YAML) and re-valid
 
 | Check | Cap formula | Floor | Severity |
 |---|---|---|---|
-| `edge_background_level` / `frame_level_median` | additive band `median ± max(6σ, 15 ADU)` | 15 ADU | WARN |
-| `frame_noise_rms` | `max(median + 8σ, 3×median, 5.0)` | 5.0 ADU | WARN |
+| `edge_background_level` / `frame_level_median` | additive band `[min − h, max + h]` over all healthy epochs, `h = max(6σ, 30 ADU)`; 2.B.Green SLOW keeps `median ± max(6σ, 15 ADU)` | 30 ADU margin | WARN |
+| `frame_noise_rms` | heavy-tail `max(1.5 × max, median + 8σ, 5.0)` | 5.0 ADU | WARN |
 | `row_structure` / `column_structure` | heavy-tail `max(max×1.5, median + 8σ, 2.0)` | 2.0 | **FAIL (all cal types)** |
 | `saturation_fraction` | heavy-tail `max(max×1.5, median + 8σ, 0.0005)` | 5e-4 | FAIL (bias) / WARN (other cals) |
 | `ccd_temperature_warm` / `_hot` | per-camera `baseline_med + margin`; margin **WARN +8 / FAIL +15 °C**, **red +10 / +16**; keyed `extension.name` only (temperature is readout-mode independent) | — | WARN / FAIL |
 
-Derivation constants: `K_LEVEL 6`, `FLOOR_LEVEL 15 ADU`, `N_CAP 8σ`, `FLOOR_STRUCT 2.0`,
+Derivation constants: `K_LEVEL 6`, `DRIFT_MARGIN_ADU 30`, `FLOOR_LEVEL 15 ADU` (legacy band of
+the frozen 2.B.Green SLOW only), `N_CAP 8σ`, `FLOOR_STRUCT 2.0`,
 `FLOOR_RMS 5.0`, `FLOOR_SAT 0.0005`. Structure caps are **heavy-tail** (the detector's own
 unscreened max × 1.5, not sigma-clipped) so naturally-structured detectors (e.g. blue 3.A
 row-banding ≈1424) keep loose caps and don't false-fail. The **full per-detector cap values**

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Generate qa_config_cal.yaml + qa_config_science.yaml from the ROBUST derived
 thresholds. Builds complete per-detector (extension.name x readout_mode) lookup
-tables (color-median fallback for the always-placeholder blue detectors).
+tables; any field without a derived value (a camera with no vetted baseline, e.g.
+1.A.Blue / 4.A.Blue, whose caps are None) takes the colour median of that field,
+and a leaf that still has a missing field is omitted so the rule SKIPs.
 
 Design (2026-09 revision -- see docs/QA_CHECKS_CATALOGUE.md):
 - Background/level checks consume the per-detector unilluminated-stripe band
@@ -80,9 +82,13 @@ def fallback(pc, mode, color, getter):
 
 
 def build_table(pc, leaf_fn):
-    """leaf_fn(entry) -> dict of numeric fields; None-entries filled by color median
-    of each field."""
+    """leaf_fn(entry) -> dict of numeric fields (None where not derived). Each None
+    field -- or every field of a detector with no derived entry -- is filled with the
+    colour median of that field over the other detectors of the same mode. A leaf
+    with a field that is still None is omitted (the rule SKIPs for that detector):
+    the engine raises on a missing field and the validator rejects nulls."""
     table = {}
+    entries = DER["per_detector"].get(pc, {})
     for name in NAMES:
         color = NAME_COLOR[name]
         for mode in modes_for(pc):
@@ -90,25 +96,45 @@ def build_table(pc, leaf_fn):
             if e:
                 leaf = leaf_fn(e)
             else:
-                sample = next((leaf_fn(x) for x in DER["per_detector"].get(pc, {}).get(mode, {}).values()), None)
+                sample = next((leaf_fn(x) for x in entries.get(mode, {}).values()), None)
                 if sample is None:
                     continue
-                leaf = {}
-                for f in sample:
+                leaf = dict.fromkeys(sample)
+            for f, v in leaf.items():
+                if v is None:
                     leaf[f] = fallback(pc, mode, color, lambda x, f=f: leaf_fn(x)[f])
+            if any(v is None for v in leaf.values()):
+                continue
             table.setdefault(name, {})[mode] = {k: round(float(v), 4) for k, v in leaf.items()}
     return table
 
 
-edge_leaf = lambda e: {"min": e["edge_bg"]["min"], "max": e["edge_bg"]["max"]}
-level_leaf = lambda e: {"med_min": e["full_level"]["med_min"], "med_max": e["full_level"]["med_max"],
-                        "rms_max": e["full_level"]["rms_max"]}
-struct_leaf = lambda e: {"row_max": e["structure"]["row_max"], "col_max": e["structure"]["col_max"],
-                         "row_fail_max": STRUCT_FAIL_FACTOR * e["structure"]["row_max"],
-                         "col_fail_max": STRUCT_FAIL_FACTOR * e["structure"]["col_max"]}
+def _get(e, *keys):
+    """Nested lookup that returns None on a missing key or a null value."""
+    for k in keys:
+        if not isinstance(e, dict):
+            return None
+        e = e.get(k)
+        if e is None:
+            return None
+    return e
+
+
+def _times(factor, v):
+    return None if v is None else factor * v
+
+
+edge_leaf = lambda e: {"min": _get(e, "edge_bg", "min"), "max": _get(e, "edge_bg", "max")}
+level_leaf = lambda e: {"med_min": _get(e, "full_level", "med_min"),
+                        "med_max": _get(e, "full_level", "med_max"),
+                        "rms_max": _get(e, "full_level", "rms_max")}
+struct_leaf = lambda e: {"row_max": _get(e, "structure", "row_max"),
+                         "col_max": _get(e, "structure", "col_max"),
+                         "row_fail_max": _times(STRUCT_FAIL_FACTOR, _get(e, "structure", "row_max")),
+                         "col_fail_max": _times(STRUCT_FAIL_FACTOR, _get(e, "structure", "col_max"))}
 # signal-normalised structure (structure / lamp signal, dimensionless): no gross tier
-struct_norm_leaf = lambda e: {"row_max": e["structure_norm"]["row_max"],
-                              "col_max": e["structure_norm"]["col_max"]}
+struct_norm_leaf = lambda e: {"row_max": _get(e, "structure_norm", "row_max"),
+                              "col_max": _get(e, "structure_norm", "col_max")}
 # Rule sets whose structure rules use the normalised metric. The ThAr line
 # pattern IS the structure and scales with lamp signal (exposure time), so the
 # absolute caps only encoded the baseline exposures (FAST arcs 0.07-0.4 s, SLOW
@@ -117,10 +143,10 @@ NORMALISED_STRUCTURE_SETS = {"ARC_THAR"}
 MIN_SIGNAL_NORM = 2.0   # ADU above the edge stripe; fainter -> rule SKIPs
 # Vertical halo / smear on arcs (std of the per-column median profile over the lamp
 # signal): the fault the 2026-07-10 commissioning arcs show. Same sets as above.
-smear_leaf = lambda e: {"max": e["smear"]["max"]}
+smear_leaf = lambda e: {"max": _get(e, "smear", "max")}
 MIN_SIGNAL_SMEAR = 20.0  # ADU; green/blue column medians are noise below this
 SMEAR_SMOOTH_COLUMNS = 15  # running median that removes narrow vertical lines (aggregate_thresholds)
-sat_leaf = lambda e: {"frac_max": e["sat_frac_max"]}
+sat_leaf = lambda e: {"frac_max": _get(e, "sat_frac_max")}
 
 KEYS = [{"from": "extension.name"}, {"from": "metadata.readout_mode"}]
 
@@ -436,8 +462,10 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
 
     hdr = ("# LLAMAS %s QA config -- GENERATED from robust baseline analysis "
-           "(2026-04-07/05-02/06-30; trimmed-mean structure profiles + MAD rms, WARN/FAIL tiers, 2026-09; "
-           "ThAr structure normalised by lamp signal + vertical-smear rule (15-column running median), 2026-10). "
+           "(2026-04-07/05-02/06-30 + 2026-10-14 level-only; trimmed-mean structure profiles + MAD rms, "
+           "WARN/FAIL tiers, 2026-09; ThAr structure normalised by lamp signal + vertical-smear rule "
+           "(15-column running median), 2026-10; level/edge bands = observed range + max(6 sigma, 30 ADU) "
+           "drift margin, 2.B.Green SLOW frozen at its legacy band, 2026-10). "
            "See docs/QA_CHECKS_CATALOGUE.md; regenerate via scripts/gen_configs.py.\n")
     dump(build_cal_config(), os.path.join(args.out_dir, "qa_config_cal.yaml"), hdr % "calibration")
     dump(build_science_config(), os.path.join(args.out_dir, "qa_config_science.yaml"), hdr % "science")
