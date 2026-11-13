@@ -144,6 +144,7 @@ on a bias means the frame is not usable as a bias, not that one detector is nois
 | Saturation | light leak or saturated pixels (above 63000 ADU) | WARN above the detector's cap; bias/dark **FAIL** above 1 % of the frame |
 | CCD temperature — warm / hot / shut-off | cooling degrading or failed | WARN / **FAIL** / **FAIL** |
 | Background level and read noise | bias-level drift, excess noise | WARN |
+| Pixel bit errors | the camera's digitiser corrupting pixel values (a stuck or flipping bit; 2.B.Green since at least 2026-04): a jump in the pixel-value histogram between neighbouring values | WARN above 0.6 (healthy cameras ≤ 0.27); never FAIL |
 
 - Whole-frame level and read-noise checks are **not** applied to arcs and flats, because
   brightness scales with exposure time and a fixed level band would be meaningless. The
@@ -219,10 +220,17 @@ calib-root file, shipped file. The list in force is printed on the `-v` `structu
 | Camera-warming gradient | dark-current glow from a warming detector | WARN |
 | Saturation | saturated target or sky (more than 2% of pixels) | WARN |
 | CCD temperature — warm / hot / shut-off | cooling degrading or failed | WARN / **FAIL** / **FAIL** |
+| Readout division | part of the detector read out at a wrong level: a solid step across one row boundary, identical in every column (2.B.Green on 2026-11-01: rows 0–896 read 32 ADU high, 20× the sky) | **FAIL** when the step's significance z exceeds 20 (healthy frames ≤ 4.4, faulty ones 44–97); the message names the row and the jump in ADU |
+| Pixel bit errors | the camera's digitiser corrupting pixel values (as for calibrations) | WARN above 0.6; never FAIL |
 
-- There are no background-level or structure checks on science frames. Real sky and
+- There are no background-level or banding checks on science frames. Real sky and
   dispersed-spectrum structure on a bright or long exposure cannot be separated from a detector
-  fault by any fixed limit, so attempting it only produces false alarms.
+  fault by any fixed limit, so attempting it only produces false alarms. The one structure check
+  is the readout division, which is not a limit on the level or the banding but a test for a
+  sudden, solid step: it measures the jump across every row boundary against the detector's own
+  row-to-row noise, and keeps only a step that has the same size in every part of the row and
+  stays changed for 32 rows. Stars, sky lines, fibres and illumination edges vary along the
+  dispersion or fall back, and do not trip it.
 - The warming-gradient check is skipped on exposures shorter than 8 s.
 
 ### Warm cameras: the one thing to understand
@@ -254,6 +262,11 @@ worth acting on even when the temperature reads fine.**
   carry heavy dark current until it is fixed.
 - **WARN — camera-warming gradient.** The earliest sign of a warming camera. Watch that detector
   over the next few frames.
+- **FAIL — readout division.** Part of that camera was read out with a wrong level, so its
+  data are unusable. Re-take the frame, and report the camera to engineering.
+- **WARN — pixel bit errors.** The camera's digitiser is corrupting pixel values (2.B.Green
+  since at least 2026-04). The frame is usable unless a readout division also fires on it;
+  report the camera to engineering.
 - **WARN — level, noise or saturation.** Usually benign drift. Note it and keep observing;
   roughly one in twelve normal calibration frames warns this way.
 - **Exit code 3, or an ERROR verdict.** The check did not actually run — typically an unreadable

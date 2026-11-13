@@ -1,4 +1,4 @@
-# LLAMAS calibration QA config -- GENERATED from robust baseline analysis (2026-04-07/05-02/06-30 + 2026-10-14 level-only; trimmed-mean structure profiles + MAD rms, WARN/FAIL tiers, 2026-09; ThAr structure normalised by lamp signal + vertical-smear rule (15-column running median), 2026-10; level/edge bands = observed range + max(6 sigma, 30 ADU) drift margin, 2026-10; bias row-stripe FAIL rule, 2.B.Green SLOW unfrozen, 2026-10-15). See docs/QA_CHECKS_CATALOGUE.md; regenerate via scripts/gen_configs.py.
+# LLAMAS calibration QA config -- GENERATED from robust baseline analysis (2026-04-07/05-02/06-30 + 2026-10-14 level-only; trimmed-mean structure profiles + MAD rms, WARN/FAIL tiers, 2026-09; ThAr structure normalised by lamp signal + vertical-smear rule (15-column running median), 2026-10; level/edge bands = observed range + max(6 sigma, 30 ADU) drift margin, 2026-10; bias row-stripe FAIL rule, 2.B.Green SLOW unfrozen, 2026-10-15; pixel bit-error WARN rule (all frame types) + science readout-division (gradient) FAIL rule, 2026-11). See docs/QA_CHECKS_CATALOGUE.md; regenerate via scripts/gen_configs.py.
 config_version: '1.0'
 instrument:
   name: LLAMAS
@@ -174,6 +174,10 @@ metrics:
     - REXPTIME
     - EXPTIME
     min_exptime: 8.0
+  bit_errors:
+    type: code_discontinuity
+    min_count: 1000
+    max_value: 63000
   row_stripes:
     type: row_stripes
     trim: 0.25
@@ -3218,6 +3222,13 @@ rule_sets:
         - CCDTEMP-1
         limits:
           max: -60.0
+    - name: pixel_bit_errors
+      region: full_frame
+      metric: bit_errors
+      per_extension: true
+      severity: WARN
+      limits:
+        max: 0.6
   DARK:
     applies_when:
       exposure_type: CAL.R-DRK
@@ -3358,6 +3369,13 @@ rule_sets:
         - CCDTEMP-1
         limits:
           max: -60.0
+    - name: pixel_bit_errors
+      region: full_frame
+      metric: bit_errors
+      per_extension: true
+      severity: WARN
+      limits:
+        max: 0.6
   LDLS_FLAT:
     applies_when:
       exposure_type: CAL.R-FLT
@@ -3454,6 +3472,13 @@ rule_sets:
         - CCDTEMP-1
         limits:
           max: -60.0
+    - name: pixel_bit_errors
+      region: full_frame
+      metric: bit_errors
+      per_extension: true
+      severity: WARN
+      limits:
+        max: 0.6
   SKY_FLAT:
     applies_when:
       exposure_type: CAL.R-SKY
@@ -3550,6 +3575,13 @@ rule_sets:
         - CCDTEMP-1
         limits:
           max: -60.0
+    - name: pixel_bit_errors
+      region: full_frame
+      metric: bit_errors
+      per_extension: true
+      severity: WARN
+      limits:
+        max: 0.6
   ARC_THAR:
     applies_when:
       exposure_type: CAL.R-ARC
@@ -3655,3 +3687,10 @@ rule_sets:
         - CCDTEMP-1
         limits:
           max: -60.0
+    - name: pixel_bit_errors
+      region: full_frame
+      metric: bit_errors
+      per_extension: true
+      severity: WARN
+      limits:
+        max: 0.6

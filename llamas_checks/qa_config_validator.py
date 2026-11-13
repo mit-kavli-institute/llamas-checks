@@ -74,6 +74,8 @@ class QAConfigValidator:
         "column_structure_norm",
         "vertical_smear",
         "row_stripes",
+        "row_gradient_division",
+        "code_discontinuity",
         "background_gradient_rate",
     }
     SEVERITIES = {"PASS", "WARN", "FAIL"}
@@ -296,12 +298,64 @@ class QAConfigValidator:
                 if er is not None and not (isinstance(er, int) and not isinstance(er, bool)
                                            and er >= 0):
                     self.add_error(f"{path}.edge_rows", "must be a non-negative integer")
+            if mtype == "code_discontinuity":
+                # optional: pixels a value needs to take part, and the value above
+                # which the histogram is ignored (saturation)
+                allowed.update({"min_count", "max_value"})
+                mc = metric.get("min_count")
+                if mc is not None and not self._is_positive_int(mc):
+                    self.add_error(f"{path}.min_count", "must be a positive integer")
+                mv = metric.get("max_value")
+                if mv is not None and not (self.is_number(mv) and float(mv) > 0):
+                    self.add_error(f"{path}.max_value", "must be a positive number")
+            if mtype == "row_gradient_division":
+                self._validate_division_metric(metric, path, allowed)
             for field, value in metric.items():
                 if field not in allowed:
                     self.add_error(f"{path}.{field}", "unknown field for this metric type")
                 if value is None:
                     self.add_error(f"{path}.{field}", "must not be null")
  
+    @staticmethod
+    def _is_positive_int(value: Any) -> bool:
+        return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+    def _validate_division_metric(self, metric: dict[str, Any], path: str,
+                                  allowed: set[str]) -> None:
+        """Optional parameters of the readout-division (row gradient) metric."""
+        allowed.update({"blocks", "column_stride", "quantiles", "rows", "gap", "persist_rows",
+                        "min_uniformity", "persist_min", "persist_max", "min_mad", "min_z",
+                        "saturation"})
+        for key in ("blocks", "column_stride", "rows", "persist_rows"):
+            if metric.get(key) is not None and not self._is_positive_int(metric[key]):
+                self.add_error(f"{path}.{key}", "must be a positive integer")
+        gap = metric.get("gap")
+        if gap is not None and not (isinstance(gap, int) and not isinstance(gap, bool)
+                                    and gap >= 0):
+            self.add_error(f"{path}.gap", "must be a non-negative integer")
+        quantiles = metric.get("quantiles")
+        if quantiles is not None and not (
+                isinstance(quantiles, list) and quantiles
+                and all(self.is_number(q) and 0 < float(q) < 1 for q in quantiles)):
+            self.add_error(f"{path}.quantiles",
+                           "must be a non-empty list of numbers with 0 < q < 1")
+        mu = metric.get("min_uniformity")
+        if mu is not None and not (self.is_number(mu) and 0 < float(mu) <= 1):
+            self.add_error(f"{path}.min_uniformity", "must be a number with 0 < value <= 1")
+        pmin, pmax = metric.get("persist_min"), metric.get("persist_max")
+        for key, value in (("persist_min", pmin), ("persist_max", pmax)):
+            if value is not None and not (self.is_number(value) and float(value) > 0):
+                self.add_error(f"{path}.{key}", "must be a positive number")
+        # a bound left out takes the engine default (0.6 / 1.6)
+        low = float(pmin) if self.is_number(pmin) else 0.6
+        high = float(pmax) if self.is_number(pmax) else 1.6
+        if (pmin is not None or pmax is not None) and not low < high:
+            self.add_error(f"{path}.persist_max", "must be greater than persist_min")
+        for key in ("min_mad", "min_z", "saturation"):
+            value = metric.get(key)
+            if value is not None and not (self.is_number(value) and float(value) >= 0):
+                self.add_error(f"{path}.{key}", "must be a non-negative number")
+
     def validate_lookup_tables(self) -> None:
         lookup_tables = self.config.get("lookup_tables")
         if lookup_tables is None:

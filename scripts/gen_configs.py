@@ -51,6 +51,16 @@ SAT_GROSS_UNIFORM = 0.01
 # Unilluminated bottom-stripe median at/above this = the stripe itself is saturated.
 # Normal frames (incl. the 0.3 s LDLS flats that rail the reds) stay below ~5000 ADU.
 EDGE_SAT_ADU = 63000.0
+# Pixel bit errors (all frame types, WARN only): largest jump in log-counts between
+# neighbouring pixel values beyond the local curvature. Healthy cameras read <= 0.27
+# over ~190 frames of every type (2026-04-07..11-10); 2.B.Green reads 0.4-5.0. It never
+# FAILs: frames with bit errors are often usable; unusable ones FAIL readout_division.
+BIT_ERROR_WARN = 0.6
+BIT_MIN_COUNT = 1000
+# Science readout division (FAIL): significance z of the strongest solid row-boundary
+# step inside the fibre-lit rows. Healthy detector-frames read <= 4.4; the faulty
+# 2.B.Green frames of 2026-10/11 read 44-97.
+DIVISION_FAIL_Z = 20.0
 
 BENCH_SIDES = [(b, s) for b in (1, 2, 3, 4) for s in ("A", "B")]
 COLORS = [("Red", "red"), ("Green", "green"), ("Blue", "blue")]
@@ -193,6 +203,10 @@ def base_blocks():
             "background_gradient_rate": {"type": "background_gradient_rate",
                                          "exptime_keys": ["SEXPTIME", "REXPTIME", "EXPTIME"],
                                          "min_exptime": WARM_MIN_EXPTIME},
+            # digitiser bit errors: jump of the pixel-value histogram between
+            # neighbouring values (read off the full-frame value histogram)
+            "bit_errors": {"type": "code_discontinuity", "min_count": BIT_MIN_COUNT,
+                           "max_value": int(EDGE_SAT_ADU)},
         },
         "verdict_policy": {"fail_if_any_fail": True, "warn_if_any_warn": True},
     }
@@ -383,6 +397,20 @@ def edge_sat_rule():
             "per_extension": True, "severity": "FAIL", "limits": {"max": EDGE_SAT_ADU}}
 
 
+def bit_error_rule():
+    """Every frame type: corrupted pixel-value bits (digitiser fault) are a WARN, never
+    a FAIL -- the frame is usable unless a readout division also fires."""
+    return {"name": "pixel_bit_errors", "region": "full_frame", "metric": "bit_errors",
+            "per_extension": True, "severity": "WARN", "limits": {"max": BIT_ERROR_WARN}}
+
+
+def readout_division_rule():
+    """Science: a solid level step across one row boundary, the same in every column
+    (part of the detector read out with a stuck bit / wrong level) is a FAIL."""
+    return {"name": "readout_division", "region": "fibre_core", "metric": "row_division",
+            "per_extension": True, "severity": "FAIL", "limits": {"max": DIVISION_FAIL_Z}}
+
+
 def build_cal_config():
     cfg = base_blocks()
     # bias only: interquartile-mean row profile vs its running median (row stripes)
@@ -431,6 +459,7 @@ def build_cal_config():
                 rules += [smear_rule(sm, "FAIL")]
             rules += [sat_rule(sa, "WARN")]
         rules += temp_rules()
+        rules += [bit_error_rule()]
         rule_sets[setname] = {"applies_when": {"exposure_type": pc}, "rules": rules}
     cfg["lookup_tables"] = lookup
     cfg["rule_sets"] = rule_sets
@@ -450,6 +479,12 @@ def build_science_config():
     still also covered by the CCD temperature header check (when populated) and the
     shutter fault; gross saturation is flagged too."""
     cfg = base_blocks()
+    # fibre-lit rows (~60-2000), clear of the unilluminated edge stripes
+    cfg["regions"]["fibre_core"] = {"type": "rectangle", "x_start": 100, "x_end": 1948,
+                                    "y_start": 100, "y_end": 1950}
+    # readout division: significance of the strongest solid row-boundary step (all
+    # algorithm parameters at the engine defaults, see qa_engine.DIVISION_TYPES)
+    cfg["metrics"]["row_division"] = {"type": "row_gradient_division"}
     cfg["lookup_tables"] = {"temp": build_temp_table()}   # per-camera CCD temperature caps
     s = DER["shutter"]["SCI.R-*"]
     rules = [
@@ -460,7 +495,8 @@ def build_science_config():
          "per_extension": True, "severity": "WARN", "limits": {"max": 0.02}},
         edge_sat_rule(),
         warming_rate_rule(),
-    ] + temp_rules()
+        readout_division_rule(),
+    ] + temp_rules() + [bit_error_rule()]
     cfg["rule_sets"] = {"SCIENCE": {"applies_when": {"exposure_type": "SCI.R-*"}, "rules": rules}}
     return cfg
 
@@ -489,7 +525,9 @@ def main():
            "(2026-04-07/05-02/06-30 + 2026-10-14 level-only; trimmed-mean structure profiles + MAD rms, "
            "WARN/FAIL tiers, 2026-09; ThAr structure normalised by lamp signal + vertical-smear rule "
            "(15-column running median), 2026-10; level/edge bands = observed range + max(6 sigma, 30 ADU) "
-           "drift margin, 2026-10; bias row-stripe FAIL rule, 2.B.Green SLOW unfrozen, 2026-10-15). "
+           "drift margin, 2026-10; bias row-stripe FAIL rule, 2.B.Green SLOW unfrozen, 2026-10-15; "
+           "pixel bit-error WARN rule (all frame types) + science readout-division (gradient) "
+           "FAIL rule, 2026-11). "
            "See docs/QA_CHECKS_CATALOGUE.md; regenerate via scripts/gen_configs.py.\n")
     dump(build_cal_config(), os.path.join(args.out_dir, "qa_config_cal.yaml"), hdr % "calibration")
     dump(build_science_config(), os.path.join(args.out_dir, "qa_config_science.yaml"), hdr % "science")

@@ -15,6 +15,7 @@ or whose file is missing is reported as MISSING and skipped):
   --sept06-dir          LLAMAS_QA_SEPT06_DIR         Llamas_Commissioning_Data/20260906_07_cals
   --sept07-dir          LLAMAS_QA_SEPT07_DIR         Llamas_Commissioning_Data/20260907_08
   --oct14-dir           LLAMAS_QA_OCT14_DIR          Llamas_Commissioning_Data/20261014_15
+  --nov01-dir           LLAMAS_QA_NOV01_DIR          Box LLAMAS_analysis (the 2026-11-01 EG21 frame)
 
 Images are written as JPEG (noise-like frames do not compress as PNG) into
 <out-dir>/images/, the document to <out-dir>/QA_EXAMPLES.md.
@@ -49,6 +50,7 @@ ZOOM_OVERRIDE = {
     "pass_dark_glow_multi": "1.A.Red",
     "warn_bias_fast_hotpixels": "2.A.Red",
     "fail_bias_stripes_2bgreen": "2.B.Green",
+    "fail_science_readout_division": "2.B.Green",
 }
 
 # (slug, title, root key, relative path, previous verdict, explanation)
@@ -158,6 +160,15 @@ CASES = {
          "the per-row interquartile mean off its 15-row running median) reads 16.7 against a 2 ADU "
          "cap; healthy SLOW biases read <= 0.34. The 667 ADU level is the detector's new normal "
          "and no longer warns."),
+        ("fail_science_readout_division", "Science frame split by a readout division on 2.B.Green (November 1)",
+         "nov01", "LLAMAS_2026-11-01_05-54-08.1_SCI24_mef.fits", "PASS (undetected)",
+         "EG21, 60 s. Rows 0-896 of 2.B.Green read 32 ADU high (bit 5 of the digitised values stuck "
+         "on for the first 897 rows read), ~20x the 1.5 ADU sky on that detector, so the camera's "
+         "data are unusable. readout_division measures the jump across every row boundary against "
+         "the detector's own row-to-row noise and keeps only a step that is the same in every "
+         "column block and persists: z = 85.7 at row 896 (-31.8 ADU) against a FAIL threshold of "
+         "20; healthy frames read <= 4.4. pixel_bit_errors also WARNs on 2.B.Green (it never FAILs "
+         "on its own)."),
         ("fail_arc_odd", "ThAr arc with odd structure on every detector (July 10)", "commissioning",
          "LLAMAS_2026-07-10_20-22-43.7_CAL22_mef.fits", "FAIL (column_structure on 22/22 detectors)",
          "Blooming/excess structure on every live detector relative to the fixed-lamp ThAr "
@@ -188,6 +199,7 @@ def parse_args():
     parser.add_argument("--sept06-dir", default=os.environ.get("LLAMAS_QA_SEPT06_DIR"))
     parser.add_argument("--sept07-dir", default=os.environ.get("LLAMAS_QA_SEPT07_DIR"))
     parser.add_argument("--oct14-dir", default=os.environ.get("LLAMAS_QA_OCT14_DIR"))
+    parser.add_argument("--nov01-dir", default=os.environ.get("LLAMAS_QA_NOV01_DIR"))
     parser.add_argument("--out-dir", default=str(REPO_ROOT / "docs"),
                         help="where QA_EXAMPLES.md and images/ go (default: the repo docs/)")
     parser.add_argument("--jpeg-quality", type=int, default=80)
@@ -321,7 +333,7 @@ def main():
     args = parse_args()
     roots = {"baselines": args.baselines_root, "warm": args.warm_dir,
              "commissioning": args.commissioning_dir, "sept06": args.sept06_dir, "sept07": args.sept07_dir,
-             "oct14": args.oct14_dir}
+             "oct14": args.oct14_dir, "nov01": args.nov01_dir}
     out_dir = Path(args.out_dir); images_dir = out_dir / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
 

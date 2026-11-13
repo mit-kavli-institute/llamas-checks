@@ -119,6 +119,47 @@ STRIPE_TYPES = ("row_stripes",)
 DEFAULT_STRIPE_TRIM = 0.25
 DEFAULT_STRIPE_SMOOTH = 15  # rows
 DEFAULT_STRIPE_EDGE = 8     # rows ignored at each end
+# Readout division on a science frame: a camera whose digitiser has a stuck bit for
+# part of the readout (2.B.Green, 2026-11-01: bit 5 = 32 ADU stuck high for the
+# first 897 rows) shows a solid step in the level across one row boundary, the same
+# in every column. The metric is the significance z of the strongest such step: a
+# low-quantile (row floor) and a median row profile are formed per column block
+# from one sort of a column-subsampled region, the jump across every row boundary
+# is the block-median of (mean of the next `rows` rows - mean of the previous
+# `rows` rows, `gap` rows apart so a jump inside one row counts fully), and z is
+# that jump over 1.4826 * MAD of all boundaries' jumps (the detector's own
+# row-to-row gradient noise, floored at `min_mad`). A boundary qualifies only when
+# the jump has the same sign in every block, its smallest block jump is at least
+# `min_uniformity` of the largest (stars, sky lines and fibre or illumination
+# edges vary along the dispersion; a readout offset does not), the level stays
+# changed over `persist_rows` rows (median-to-median step over the jump within
+# [persist_min, persist_max]; a star or fibre rises and falls back) and no block
+# median near it is saturated. Healthy frames of every type read z <= 4.4; the
+# three faulty 2.B.Green frames of 2026-10/11 read 44-97.
+DIVISION_TYPES = ("row_gradient_division",)
+DEFAULT_DIVISION_BLOCKS = 8
+DEFAULT_DIVISION_COLUMN_STRIDE = 4
+DEFAULT_DIVISION_QUANTILES = (0.10, 0.50)
+DEFAULT_DIVISION_ROWS = 4
+DEFAULT_DIVISION_GAP = 2
+DEFAULT_DIVISION_PERSIST_ROWS = 32
+DEFAULT_DIVISION_MIN_UNIFORMITY = 0.5
+DEFAULT_DIVISION_PERSIST_MIN = 0.6
+DEFAULT_DIVISION_PERSIST_MAX = 1.6
+DEFAULT_DIVISION_MIN_MAD = 0.1
+DEFAULT_DIVISION_MIN_Z = 5.0
+DEFAULT_DIVISION_SATURATION = 63000.0
+_DIVISION_PROFILE_LABELS = {0.10: "row floor", 0.50: "row median"}
+
+# Pixel bit errors: read noise (sigma ~2.5 ADU) makes the value histogram of any
+# real image smooth from one value to the next, so a jump in log-counts between
+# neighbouring values (beyond the local curvature) means the digitised values are
+# corrupted -- a bit stuck or flipping. Healthy cameras read <= 0.27; 2.B.Green
+# 0.4-5.0, always at a multiple of 16. Read off the region's cached value histogram.
+BIT_ERROR_TYPES = ("code_discontinuity",)
+DEFAULT_BIT_MIN_COUNT = 1000
+DEFAULT_BIT_MAX_VALUE = 63000
+
 # Metric types that need the line profiles of the region (shared per HDU).
 _PROFILE_TYPES = (("row_structure", "column_structure") + STRUCTURE_NORM_TYPES + SMEAR_TYPES
                   + STRIPE_TYPES)
@@ -183,6 +224,10 @@ class _ExtensionCache:
     # (region_name, axis) -> trim fraction of the inner-trimmed profile a row-stripe
     # rule needs, so the same sort also yields that profile
     want_inner: dict[tuple[str, int], float] = field(default_factory=dict)
+    # (region_name, metric_name) -> human-readable detail of the measurement (where
+    # the readout division is, which pixel value jumps), appended to the message
+    # of a rule that fires
+    details: dict[tuple[str, str], str] = field(default_factory=dict)
 
 
 @dataclass
@@ -560,6 +605,15 @@ class QAEngine:
                 if isinstance(exptime, Exception):
                     raise exptime
                 return self._compute_metric(region_data, metric, exptime=exptime)
+            details: dict[str, str] = {}
+            if metric_type in DIVISION_TYPES:
+                # independent of the shared line profiles: its own subsampled sort
+                row_offset = int(region.get("y_start", 0)) if region.get("type") == "rectangle" else 0
+                value = self._compute_metric(region_data, metric, details=details,
+                                             row_offset=row_offset)
+                if "text" in details:
+                    entry.details[(region_name, metric_name)] = details["text"]
+                return value
             if metric_type in _PROFILE_TYPES:
                 axis = _profile_axis(metric_type)
                 need_median = metric_type in SMEAR_TYPES or (region_name, axis) in entry.want_median
@@ -587,8 +641,11 @@ class QAEngine:
                                                   metric, extension_name)
                 return self._compute_metric(region_data, metric, signal=signal,
                                             profiles=profiles)
-            return self._compute_metric(region_data, metric, histograms=entry.histograms,
-                                        region_name=region_name)
+            value = self._compute_metric(region_data, metric, histograms=entry.histograms,
+                                         region_name=region_name, details=details)
+            if "text" in details:
+                entry.details[(region_name, metric_name)] = details["text"]
+            return value
         except QAEngineError as exc:
             return exc
 
@@ -1036,6 +1093,9 @@ class QAEngine:
             return self._error_rule_result(rule_set_name, rule, extension, str(exc))
         passed, message = self._check_limits(measured_value, limits)
         verdict_effect = "PASS" if passed else severity
+        detail = entry.details.get(key)
+        if detail and not passed:
+            message = f"{message} ({detail})"
 
         return RuleResult(
             rule_set=rule_set_name,
@@ -1106,16 +1166,47 @@ class QAEngine:
                         exptime: float | None = None, signal: float | None = None,
                         profiles: tuple[Any, Any] | None = None,
                         histograms: dict[str, Any] | None = None,
-                        region_name: str | None = None) -> float:
+                        region_name: str | None = None,
+                        details: dict[str, str] | None = None,
+                        row_offset: int = 0) -> float:
         """Evaluate ``metric`` on ``region_data``. ``exptime`` is required by the
         gradient-rate metric, ``signal`` (ADU above the edge stripe, see
         ``_resolve_signal``) by the normalised structure and smear metrics, and
         ``profiles`` (the ``line_profiles`` of the region along the metric's axis)
         lets the profile metrics share one sort; when it is None the profiles
         are computed here. ``histograms`` / ``region_name`` let the 16-bit integer
-        kernels share one value histogram per region."""
+        kernels share one value histogram per region. ``details`` (a dict), when
+        given, receives a ``"text"`` entry describing where the readout-division or
+        bit-error metric found its feature; ``row_offset`` (the region's first row)
+        turns the division's row into a detector row."""
         raw = np.asarray(region_data)
         metric_type = metric["type"]
+
+        if metric_type in DIVISION_TYPES:
+            # Solid division across the detector rows (see DIVISION_TYPES).
+            if raw.ndim != 2:
+                raise QAEngineError("row_gradient_division requires a 2D region")
+            z, row, jump, label = row_gradient_division(
+                raw,
+                blocks=int(metric.get("blocks", DEFAULT_DIVISION_BLOCKS)),
+                column_stride=int(metric.get("column_stride", DEFAULT_DIVISION_COLUMN_STRIDE)),
+                quantiles=tuple(float(q) for q in metric.get("quantiles",
+                                                             DEFAULT_DIVISION_QUANTILES)),
+                rows=int(metric.get("rows", DEFAULT_DIVISION_ROWS)),
+                gap=int(metric.get("gap", DEFAULT_DIVISION_GAP)),
+                persist_rows=int(metric.get("persist_rows", DEFAULT_DIVISION_PERSIST_ROWS)),
+                min_uniformity=float(metric.get("min_uniformity",
+                                                DEFAULT_DIVISION_MIN_UNIFORMITY)),
+                persist_min=float(metric.get("persist_min", DEFAULT_DIVISION_PERSIST_MIN)),
+                persist_max=float(metric.get("persist_max", DEFAULT_DIVISION_PERSIST_MAX)),
+                min_mad=float(metric.get("min_mad", DEFAULT_DIVISION_MIN_MAD)),
+                min_z=float(metric.get("min_z", DEFAULT_DIVISION_MIN_Z)),
+                saturation=float(metric.get("saturation", DEFAULT_DIVISION_SATURATION)),
+            )
+            if details is not None and row >= 0:
+                details["text"] = (f"solid division at row {row + row_offset}: "
+                                   f"{jump:+.1f} ADU, {label}")
+            return z
 
         if metric_type in _PROFILE_TYPES:
             # Banding metric: std of the per-row (or per-column) TRIMMED means.
@@ -1166,7 +1257,7 @@ class QAEngine:
             # threshold counts come exactly from a value histogram instead of
             # partitions on a float64 copy. Metric types without an integer kernel
             # fall through to the generic float path below.
-            fast = _integer_metric(raw, metric, exptime, histograms, region_name)
+            fast = _integer_metric(raw, metric, exptime, histograms, region_name, details)
             if fast is not None:
                 return fast
         values = np.asarray(region_data, dtype=float)
@@ -1174,6 +1265,14 @@ class QAEngine:
         if finite_values.size == 0:
             raise QAEngineError("metric cannot be computed because the selected "
                                 "region contains no finite pixels")
+
+        if metric_type in BIT_ERROR_TYPES:
+            # Bit errors are read off the digitised values, so they need integers;
+            # integer-valued float data (e.g. a scaled read) still has them.
+            if not np.array_equal(finite_values, np.round(finite_values)):
+                raise LookupMissError("bit-error metric needs raw integer pixel values")
+            histogram = IntegerHistogram(finite_values.astype(np.int64))
+            return _bit_error_value(histogram, metric, details)
 
         if metric_type == "background_gradient_rate":
             # Camera-warming signal. A warming detector grows a dark-current glow --
@@ -1376,11 +1475,12 @@ class IntegerHistogram:
 
 
 def _integer_metric(values: Any, metric: dict[str, Any], exptime: float | None,
-                    histograms: dict[str, Any] | None, region_name: str | None) -> float | None:
+                    histograms: dict[str, Any] | None, region_name: str | None,
+                    details: dict[str, str] | None = None) -> float | None:
     """Fast exact kernels for 16-bit integer regions; None when the metric type has none."""
     metric_type = metric["type"]
 
-    if metric_type in ("median", "robust_std", "fraction_above", "count_above"):
+    if metric_type in ("median", "robust_std", "fraction_above", "count_above") + BIT_ERROR_TYPES:
         histogram = None
         if histograms is not None and region_name is not None:
             histogram = histograms.get(region_name)
@@ -1390,6 +1490,8 @@ def _integer_metric(values: Any, metric: dict[str, Any], exptime: float | None,
                 histograms[region_name] = histogram
         if metric_type == "median":
             return float(histogram.median())
+        if metric_type in BIT_ERROR_TYPES:
+            return _bit_error_value(histogram, metric, details)
         if metric_type == "robust_std":
             return float(1.4826 * histogram.mad())
         if metric_type == "fraction_above":
@@ -1421,6 +1523,162 @@ def _integer_metric(values: Any, metric: dict[str, Any], exptime: float | None,
         return float(max(v_grad, h_grad) / exptime)
 
     return None
+
+
+def code_discontinuity(counts: Any, offset: int = 0,
+                       min_count: int = DEFAULT_BIT_MIN_COUNT,
+                       max_value: float = DEFAULT_BIT_MAX_VALUE) -> tuple[float, int]:
+    """Largest jump in log-counts between neighbouring pixel values, beyond the local
+    curvature, of the value histogram ``counts`` (``counts[i]`` = number of pixels
+    with value ``i + offset``, as in ``IntegerHistogram``).
+
+    For each value boundary c (between values c-1 and c) whose four neighbours
+    ``h[c-2..c+1]`` all hold >= ``min_count`` pixels and with c < ``max_value``,
+    the anomaly is ``|ln h[c] - ln h[c-1] - (ln h[c-1] - ln h[c-2] + ln h[c+1] - ln h[c]) / 2|``.
+    Returns ``(anomaly, c)`` of the largest; raises LookupMissError when fewer than
+    four boundaries qualify (a railed or constant frame).
+    """
+    h = np.asarray(counts)
+    limit = int(np.ceil(max_value)) - int(offset)    # index of value max_value
+    h = h[:max(limit, 0)]
+    populated = np.flatnonzero(h >= min_count)
+    if populated.size < 4:
+        raise LookupMissError("too few populated pixel values for the bit-error metric")
+    # only boundaries inside the populated span can qualify
+    first = int(populated[0])
+    offset = int(offset) + first
+    h = h[first:int(populated[-1]) + 1].astype(np.float64)
+    ok = h >= min_count
+    c = np.arange(2, h.size - 1)
+    good = ok[c - 2] & ok[c - 1] & ok[c] & ok[c + 1]
+    if np.count_nonzero(good) < 4:
+        raise LookupMissError("too few populated pixel values for the bit-error metric")
+    c = c[good]
+    lh = np.log(np.maximum(h, 1.0))
+    step = lh[c] - lh[c - 1]
+    anomaly = np.abs(step - 0.5 * ((lh[c - 1] - lh[c - 2]) + (lh[c + 1] - lh[c])))
+    k = int(np.argmax(anomaly))
+    return float(anomaly[k]), int(c[k]) + int(offset)
+
+
+def _bit_error_value(histogram: "IntegerHistogram", metric: dict[str, Any],
+                     details: dict[str, str] | None) -> float:
+    """The bit-error metric from a value histogram, with its detail text."""
+    anomaly, code = code_discontinuity(
+        histogram.counts, histogram.offset,
+        int(metric.get("min_count", DEFAULT_BIT_MIN_COUNT)),
+        float(metric.get("max_value", DEFAULT_BIT_MAX_VALUE)))
+    if details is not None:
+        index = code - histogram.offset
+        below, above = int(histogram.counts[index - 1]), int(histogram.counts[index])
+        bit = f"bit-{(code & -code).bit_length() - 1} boundary" if code > 0 else "value boundary"
+        details["text"] = (f"pixel values jump at value {code} ({bit}): {below} -> {above} "
+                           "pixels; digitiser bit errors")
+    return anomaly
+
+
+def row_gradient_division(
+    values: Any,
+    blocks: int = DEFAULT_DIVISION_BLOCKS,
+    column_stride: int = DEFAULT_DIVISION_COLUMN_STRIDE,
+    quantiles: tuple[float, ...] = DEFAULT_DIVISION_QUANTILES,
+    rows: int = DEFAULT_DIVISION_ROWS,
+    gap: int = DEFAULT_DIVISION_GAP,
+    persist_rows: int = DEFAULT_DIVISION_PERSIST_ROWS,
+    min_uniformity: float = DEFAULT_DIVISION_MIN_UNIFORMITY,
+    persist_min: float = DEFAULT_DIVISION_PERSIST_MIN,
+    persist_max: float = DEFAULT_DIVISION_PERSIST_MAX,
+    min_mad: float = DEFAULT_DIVISION_MIN_MAD,
+    min_z: float = DEFAULT_DIVISION_MIN_Z,
+    saturation: float = DEFAULT_DIVISION_SATURATION,
+) -> tuple[float, int, float, str]:
+    """Significance of the strongest solid division across the rows of ``values``.
+
+    Returns ``(z, row, jump_adu, profile_label)``: ``row`` is the first row after
+    the division (within ``values``), ``jump_adu`` the level change (after minus
+    before) and ``profile_label`` "row floor" or "row median" for the quantile
+    profile it was found in. ``(0.0, -1, 0.0, "")`` when no boundary qualifies.
+    See DIVISION_TYPES for the method. Integer data is sorted natively; float data
+    may hold NaN (a block quantile ignores it; an all-NaN block cell takes the
+    block's median level). Raises QAEngineError when the region is too short.
+    """
+    data = np.asarray(values)
+    if data.ndim != 2:
+        raise QAEngineError("row_gradient_division requires a 2D region")
+    n = data.shape[0]
+    w, g, persist = int(rows), int(gap), int(persist_rows)
+    if n < 2 * (persist + g + w) + 1:
+        raise QAEngineError(f"row_gradient_division needs at least {2 * (persist + g + w) + 1} "
+                            f"rows; the region has {n}")
+    sub = data[:, ::max(int(column_stride), 1)]
+    nb = sub.shape[1] // int(blocks)
+    if nb < 1:
+        raise QAEngineError(f"row_gradient_division: region too narrow for {blocks} column blocks")
+    cells = sub[:, :nb * blocks].reshape(n, blocks, nb)
+    is_int = cells.dtype.kind in "iub"
+    if not is_int:
+        cells = cells.astype(np.float64)
+        cells[~np.isfinite(cells)] = np.nan
+    srt = np.sort(cells, axis=2)            # NaN sorts last; copies the strided view
+
+    # all quantile profiles at once: profiles[i, r, k] = quantile i of row r in block k
+    if is_int:
+        positions = [int(q * (nb - 1)) for q in quantiles]
+        profiles = np.moveaxis(srt[:, :, positions], 2, 0).astype(np.float64)
+    else:
+        n_valid = np.count_nonzero(~np.isnan(srt), axis=2)
+        profiles = np.empty((len(quantiles), n, blocks))
+        for i, q in enumerate(quantiles):
+            index = np.floor(q * np.maximum(n_valid - 1, 0)).astype(np.intp)
+            B = np.take_along_axis(srt, index[:, :, None], axis=2)[:, :, 0]
+            B[n_valid == 0] = np.nan
+            if np.isnan(B).any():
+                fill = np.nanmedian(B, axis=0) if not np.isnan(B).all() else np.zeros(blocks)
+                fill = np.where(np.isnan(fill), 0.0, fill)
+                B = np.where(np.isnan(B), fill[None, :], B)
+            profiles[i] = B
+
+    lo = max(persist, w) + g
+    b = np.arange(lo, n - lo + 1)           # boundary between rows b-1 and b
+    cs = np.zeros((len(quantiles), n + 1, blocks))
+    np.cumsum(profiles, axis=1, out=cs[:, 1:])
+    m = b.size                              # b is contiguous, so slices replace b +- offsets
+    G = ((cs[:, lo + g + w:lo + g + w + m] - cs[:, lo + g:lo + g + m]) / w
+         - (cs[:, lo - g:lo - g + m] - cs[:, lo - g - w:lo - g - w + m]) / w)
+    # one small sort per boundary gives the block median (identical to np.median,
+    # ~5x cheaper) and the extremes for the sign / coherence tests
+    Gs = np.sort(G, axis=2)
+    D = (Gs[:, :, (blocks - 1) // 2] + Gs[:, :, blocks // 2]) / 2.0
+    mad = 1.4826 * np.median(np.abs(D - np.median(D, axis=1, keepdims=True)), axis=1)
+    z = np.abs(D) / np.maximum(mad, max(float(min_mad), np.finfo(float).tiny))[:, None]
+
+    best = (0.0, -1, 0.0, "")
+    for i, q in enumerate(quantiles):
+        candidates = np.nonzero((z[i] >= min_z) & (D[i] != 0))[0]
+        if candidates.size == 0:
+            continue
+        lowest, highest = Gs[i, candidates, 0], Gs[i, candidates, -1]
+        rising = D[i, candidates] > 0
+        # every block jumps the same way as the median (all > 0 or all < 0), and
+        # the smallest block jump is at least min_uniformity of the largest
+        same_sign = np.where(rising, lowest > 0, highest < 0)
+        smallest = np.where(rising, lowest, -highest)
+        largest = np.where(rising, highest, -lowest)
+        candidates = candidates[same_sign & (smallest >= min_uniformity * largest)]
+        B = profiles[i]
+        for j in candidates[np.argsort(-z[i, candidates], kind="stable")]:
+            if z[i, j] <= best[0]:
+                break
+            r = int(b[j])
+            above = np.median(B[r:r + persist], axis=0)
+            below = np.median(B[r - persist:r], axis=0)
+            if (above >= saturation).any() or (below >= saturation).any():
+                continue
+            if persist_min <= np.median(above - below) / D[i, j] <= persist_max:
+                label = _DIVISION_PROFILE_LABELS.get(round(float(q), 2), f"row q{q:g}")
+                best = (float(z[i, j]), r, float(D[i, j]), label)
+                break
+    return best
 
 
 def integer_median(values: Any) -> float:

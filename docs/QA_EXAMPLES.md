@@ -433,6 +433,26 @@ Zoomed detector 2.B.Green: median 667 ADU, robust rms 3.0, row structure 2.89, c
 | WARN | `shutter_exptime_consistency` | - | 0.385 | abs_tol 0.214, rel_tol 0.1 |
 
 
+### Science frame split by a readout division on 2.B.Green (November 1)
+
+- File: `/Users/slh/Library/CloudStorage/Box-Box/slhughes/LLAMAS_analysis/LLAMAS_2026-11-01_05-54-08.1_SCI24_mef.fits`
+- Header: `EG21` / PRODCATG `SCI.R-SL` / READ-MDE `SLOW` / REXPTIME 60.0 s / SEXPTIME 59.997 s
+- **Verdict: FAIL** (`llamas-checks` exit 2); previously: PASS (undetected)
+
+EG21, 60 s. Rows 0-896 of 2.B.Green read 32 ADU high (bit 5 of the digitised values stuck on for the first 897 rows read), ~20x the 1.5 ADU sky on that detector, so the camera's data are unusable. readout_division measures the jump across every row boundary against the detector's own row-to-row noise and keeps only a step that is the same in every column block and persists: z = 85.7 at row 896 (-31.8 ADU) against a FAIL threshold of 20; healthy frames read <= 4.4. pixel_bit_errors also WARNs on 2.B.Green (it never FAILs on its own).
+
+![fail_science_readout_division mosaic](images/fail_science_readout_division_mosaic.jpg)
+
+![fail_science_readout_division zoom](images/fail_science_readout_division_zoom.jpg)
+
+Zoomed detector 2.B.Green: median 671 ADU, robust rms 14.8, row structure 15.10, column structure 0.85, saturated fraction 0.000.
+
+| severity | rule | detector | value | limit |
+|---|---|---|---|---|
+| FAIL | `readout_division` | 2.B.Green | 85.66 | max 20 |
+| WARN | `pixel_bit_errors` | 2.B.Green | 2.58 | max 0.6 |
+
+
 ### ThAr arc with odd structure on every detector (July 10)
 
 - File: `/Users/slh/Library/CloudStorage/Box-Box/slhughes/Llamas_Commissioning_Data/ut20260710_11/LLAMAS_2026-07-10_20-22-43.7_CAL22_mef.fits`
@@ -549,6 +569,7 @@ ValueError: cannot reshape array of size 3967936 into shape (2048,2048)
 | LDLS flat, 0.3 s, edge stripes railed in the reds | WARN (13 warn checks, exit 1) | **FAIL** | 2 |
 | 600 s dark with periodic column bars (June 4) | FAIL (column_structure @ 2.B.Green) | **FAIL** | 2 |
 | SLOW bias with row stripes on 2.B.Green (October 14) | WARN (row_structure, level and edge @ 2.B.Green) | **FAIL** | 2 |
+| Science frame split by a readout division on 2.B.Green (November 1) | PASS (undetected) | **FAIL** | 2 |
 | ThAr arc with odd structure on every detector (July 10) | FAIL (column_structure on 22/22 detectors) | **FAIL** | 2 |
 | Science frame with a shutter fault (600 s requested) | FAIL (shutter_exptime_consistency) | **FAIL** | 2 |
 | Baseline LDLS flat with a shutter overrun (June 30) | PASS (undetected) | **FAIL** | 2 |

@@ -202,6 +202,8 @@ so the rule SKIPs there; the reds always have > 100 ADU.
 | ccd_temperature_warm | CCDTEMP* per ext | > per-camera baseline +8 °C (red +10) | WARN |
 | ccd_temperature_hot | CCDTEMP* per ext | > per-camera baseline +15 °C (red +16) | FAIL |
 | ccd_temperature_shutoff | CCDTEMP* per ext | > −60 °C absolute | FAIL |
+| **readout_division** | fibre_core (x 100–1948, y 100–1950) solid row-boundary step, significance z | ≤ 20 | **FAIL** |
+| **pixel_bit_errors** | full_frame value-histogram discontinuity | ≤ 0.6 | **WARN** (every rule set) |
 
 Per-detector **level/edge-background bands are still omitted** on science (absolute levels vary
 with target and sky, and there are no science baselines to calibrate them). The camera-warming
@@ -227,6 +229,33 @@ from a warming glow. (b) *Full-frame robust σ (MAD)* — no transferable absolu
 noise ~3–15 ADU across epochs, a warming detector at ~10 sits inside a noisier dataset's healthy
 spread). Both fail because they are *level/amplitude* metrics; the **rate** (per-second) is the only
 one that isolates dark-current accumulation from a bright, long, or noisy but healthy exposure.
+
+**Readout division (`readout_division`, SCIENCE, FAIL; 2026-11).** `2026-11-01_05-54-08.1` (EG21,
+60 s) passed every check while 2.B.Green was unusable: bit 5 (= 32 ADU) of its digitised values was
+stuck high for the first 897 rows read, a +31 ADU step (~20× the sky) inside row 897 with flat
+plateaus on both sides, identical in every column. The user asked for a *gradient* test rather than
+a pixel-value threshold, detecting a sudden solid division wherever it occurs without being harsh.
+The metric takes the 10th-percentile (row floor) and median of every row in 8 column blocks (every
+4th column, one sort), forms the jump across each row boundary (mean of 4 rows after minus 4 rows
+before, 2 rows apart), takes the block median D and divides by 1.4826 × MAD of D over all boundaries,
+i.e. the detector's own row-to-row gradient noise. A boundary only counts when every block jumps the
+same way, the smallest block jump is ≥ ½ the largest (a readout offset is the same in every column;
+stars, sky lines and fibre/illumination edges vary along the dispersion) and the level stays changed
+over 32 rows (a star or fibre falls back). Healthy detector-frames of every type read **≤ 4.4**
+(72 science + 49 calibration frames); the three faulty 2.B.Green frames read **44–97**; the FAIL
+threshold z = 20 sits 4.5× above the healthy maximum and 2.2× below the weakest fault. The message
+names the row and the jump (`solid division at row 896: -31.8 ADU, row median`). Details in
+`QA_CHECKS_CATALOGUE.md` §6.10.
+
+**Pixel bit errors (`pixel_bit_errors`, every rule set, WARN only; 2026-11).** Read noise makes a
+real image's value histogram smooth from one value to the next; the metric is the largest jump in
+log-counts between neighbouring values beyond the local curvature (boundaries below 63000 whose four
+neighbours hold ≥ 1000 pixels), read off the full-frame histogram the level/saturation rules
+already build. Healthy cameras read ≤ 0.27 over ~190 frames of every type; 2.B.Green 0.4–5.0, at
+multiples of 16, on ~90 % of frames since at least 2026-04-07. Bit errors alone do not decide
+usability (GD71 200 s on 11-10 has 6.6 % flipped pixel pairs and is fine), so this rule **never
+FAILs**; the unusable frames are those where a contiguous block of rows is read with a stuck bit,
+and `readout_division` FAILs them. Details in `QA_CHECKS_CATALOGUE.md` §6.11.
 
 ## The two must-flag cases
 

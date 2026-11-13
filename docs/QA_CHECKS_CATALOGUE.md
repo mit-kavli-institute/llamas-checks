@@ -110,10 +110,17 @@ cosmic rays since 2026-09):
   move it (800–1600 ADU on 4.A.Red FAST in October, which would FAIL every October FAST bias), nor
   the per-row median, which is quantised to 1 ADU and misses the 1 ADU stripes of 18-11-09.8. P
   is a second slice of the same sorted rows as the row structure, so the check adds no sort.
+- **pixel bit errors** (every rule set) — the largest jump in log-counts between neighbouring
+  pixel values beyond the local curvature, `|ln h[c] − ln h[c−1] − ½(ln h[c−1] − ln h[c−2] +
+  ln h[c+1] − ln h[c])|`, over the value boundaries c < 63000 whose four neighbours each hold
+  ≥ 1000 pixels (SKIPPED when fewer than four qualify, or on non-integer data). Read off the
+  full-frame value histogram the level/saturation rules already build. See §6.11.
+- **readout division** (SCIENCE only) — the significance z of the strongest solid step across a
+  row boundary inside `fibre_core`; 0 when no boundary qualifies. See §6.10.
 - **robust rms** — 1.4826 × median absolute deviation of the pixels (read noise).
 - **median**, **fraction > 63000 ADU** — as named.
 
-### BIAS (`CAL.R-BIA`) — 15 rules
+### BIAS (`CAL.R-BIA`) — 17 rules
 
 | rule | what is measured | limit | severity |
 |---|---|---|---|
@@ -131,13 +138,14 @@ cosmic rays since 2026-09):
 | `ccd_temperature_warm` | `CCDTEMP_1` / `CCDTEMP1` / `CCDTEMP-1` of this extension | within [−140, warn_max], per det | WARN |
 | `ccd_temperature_hot` | same keyword | ≤ fail_max, per det | FAIL |
 | `ccd_temperature_shutoff` | same keyword | ≤ −60 °C, all cameras | FAIL |
+| `pixel_bit_errors` | pixel bit errors of `full_frame` (value-histogram discontinuity) | ≤ 0.6 (static) | WARN (never FAIL; every rule set) |
 
-### DARK (`CAL.R-DRK`) — 13 rules
+### DARK (`CAL.R-DRK`) — 15 rules
 
 Identical to BIAS with the DARK tables, except that the shutter rule is FAIL (abs tolerance
 0.238 s) and there is no `shutter_exptime_gross` or `row_stripes` rule.
 
-### LDLS_FLAT (`CAL.R-FLT`), ARC_THAR (`CAL.R-ARC`) — 10 rules each (fixed lamp)
+### LDLS_FLAT (`CAL.R-FLT`), ARC_THAR (`CAL.R-ARC`) — 10 / 11 rules (fixed lamp)
 
 | rule | what is measured | limit | severity |
 |---|---|---|---|
@@ -148,6 +156,7 @@ Identical to BIAS with the DARK tables, except that the shutter rule is FAIL (ab
 | `vertical_smear` (ARC only) | std of the per-column *median* profile of `full_frame`, after a 15-column running median (removes narrow vertical lines, keeps halos), ÷ lamp signal: vertical halo / smear around the lines, SKIPPED below 20 ADU of signal | ≤ robust cap max(median + 8 σ, 1.5 × p95), per det (one cap for both modes; ~0.06–0.10 red, 0.24–0.54 green/blue) | FAIL |
 | `saturation_fraction` | fraction > 63000 ADU | ≤ frac_max, per det × mode | WARN |
 | `ccd_temperature_warm` / `_hot` / `_shutoff` | `CCDTEMP*` per extension | as BIAS | WARN / FAIL / FAIL |
+| `pixel_bit_errors` | as BIAS | ≤ 0.6 | WARN |
 
 ### SKY_FLAT (`CAL.R-SKY`) — 10 rules
 
@@ -173,7 +182,7 @@ derived from baseline nights that include such frames, are effectively open. Wha
 overexposed or light-flooded flat is `edge_saturated`: the unilluminated stripe never exceeds
 ~5000 ADU on a normal frame of any type or exposure time in the baselines.
 
-### SCIENCE (`SCI.R-*`) — 7 rules
+### SCIENCE (`SCI.R-*`) — 9 rules
 
 | rule | what is measured | limit | severity |
 |---|---|---|---|
@@ -183,9 +192,15 @@ overexposed or light-flooded flat is `edge_saturated`: the unilluminated stripe 
 | `camera_warming_gradient` | background-gradient **rate**: max(\|median(bottom ¼) − median(top ¼)\|, \|median(left ¼) − median(right ¼)\|) ÷ exposure time (`SEXPTIME` → `REXPTIME` → `EXPTIME`) | ≤ 1.3 ADU/s; skipped when exposure < 8 s | WARN |
 | `ccd_temperature_warm` / `_hot` / `_shutoff` | `CCDTEMP*` per extension | as BIAS (same `temp` table) | WARN / FAIL / FAIL |
 
-No level or structure checks on science: sky and dispersed-spectrum structure on a bright or long
+| `readout_division` | significance z of the strongest solid row-boundary step in `fibre_core` (x 100–1948, y 100–1950), see §6.10 | ≤ 20 | FAIL |
+| `pixel_bit_errors` | as BIAS | ≤ 0.6 | WARN |
+
+No level or banding checks on science: sky and dispersed-spectrum structure on a bright or long
 exposure cannot be separated from a detector fault by any absolute limit. A warming detector is
 caught by the gradient *rate*, because dark current accrues per second while sky gradients do not.
+The one structure check, `readout_division` (2026-11), is not an absolute limit either: it asks
+whether one row boundary carries a sudden step that is the same in every column and persists,
+measured against the detector's own row-to-row noise (§6.10).
 
 ## 4. Static thresholds
 
@@ -208,6 +223,8 @@ caught by the gradient *rate*, because dark current accrues per second while sky
 | RMS cap floor | 5.0 ADU | BIAS, DARK |
 | saturation cap floor | 5 × 10⁻⁴ | all cal types |
 | level band drift margin | observed range ± max(6 σ, 30 ADU), every detector | BIAS, DARK, edge stripes |
+| pixel bit errors | value-histogram discontinuity > 0.6 → WARN (`pixel_bit_errors`); never FAIL | every rule set |
+| readout division | significance z > 20 → FAIL (`readout_division`) | SCIENCE |
 
 Per-camera temperature limits span a 26 °C range: 1.A.Red has a healthy baseline of −78.3 °C
 (WARN above −68.3, FAIL above −62.3) while 1.A.Green sits at −104.7 °C (WARN above −96.7, FAIL
@@ -497,9 +514,95 @@ unreadable). Before the revision the observer's log recorded 22 of 24 FAST biase
 
 No frame on either night FAILs for a reason other than the light-flooded flats.
 
+### 6.10 Science readout division → FAIL (exit 2) — `readout_division`
+
+`LLAMAS_2026-11-01_05-54-08.1_SCI24_mef.fits` (EG21, 60 s, SLOW; Box `LLAMAS_analysis`) passed
+every check before 2026-11, but camera **2.B.Green** is unusable:
+
+| | rows 0–897 | rows 898–2047 | difference |
+|---|---|---|---|
+| median (ADU) | 698 | 667 | **+31 (+4.7 %)** |
+| row floor (10th percentile) | 695 | 663 | +32 |
+| unilluminated edge stripe | 700 (bottom) | 665 (top) | +35 |
+| pixels with bit 5 (= 32) set | 99.9 % | 9 % | |
+
+The jump happens inside row 897 with flat plateaus on both sides, identical in all eight column
+blocks; the sky signal on that detector is ~1.5 ADU, so the offset is ~20× the science. The other
+23 detectors' halves agree to ±1 ADU. **Diagnosis:** bit 5 of 2.B.Green's digitised values is
+stuck high for the first 897 rows read — digital, not light. 2.B.Green shows corrupted
+pixel-value bits on ~90 % of frames since at least 2026-04-07; the other 23 cameras never do.
+
+**Algorithm** (`qa_engine.row_gradient_division`, metric type `row_gradient_division`):
+
+1. Every 4th column of `fibre_core` (x 100–1948, y 100–1950, inside the fibre-lit rows ~60–2000)
+   is split into 8 column blocks (57 samples each) and sorted within each block (native integer
+   sort, ~1.4 ms per detector; float data uses a NaN-aware fallback).
+2. Two block-row profiles come from that one sort: `B_q[r,k]`, the q-quantile of row r in block
+   k, for q = 0.10 (row floor; sees a whole-row offset even under bright fibres) and q = 0.50
+   (median; also sees partial bit-flip bands).
+3. Across every row boundary b: `G[b,k] = mean(B[b+2 : b+6, k]) − mean(B[b−6 : b−2, k])` (4 rows
+   each side, a 2-row gap so a jump inside one row counts fully), `D[b] = median_k G[b,k]`,
+   `z[b] = |D[b]| / max(1.4826·MAD_b(D), 0.1)` — the jump measured against the detector's own
+   row-to-row gradient noise, not an ADU threshold.
+4. A boundary is a **solid division** when G has the same sign in all 8 blocks; the smallest
+   block jump is ≥ 0.5 × the largest (**coherence**: a readout offset is identical in every
+   column, while stars, sky lines and fibre or illumination edges vary along the dispersion); the
+   32-row median-to-median step over D is in [0.6, 1.6] (**persistence**: the level stays changed,
+   a star or fibre rises and falls back); and no block median on either side is saturated
+   (≥ 63000).
+5. Only candidates with z ≥ 5 that pass sign and coherence get the persistence test, strongest
+   first. The metric is the largest qualifying z over both profiles; the row, the jump in ADU and
+   the profile go into the message, e.g. `FAIL readout_division @ 2.B.Green: value 85.6603 is
+   above max 20 (solid division at row 896: -31.8 ADU, row median)`.
+
+**Evidence** (72 local science frames from 2026-05-06, 10-15/16, 11-01 and 11-09/10, plus all 49
+calibration frames of 2026-11-09):
+
+| frame / detector | z | division |
+|---|---|---|
+| 2026-10-16_03-50-21.7 EG21 · 2.B.Green (bit-flip band, visible) | 97.1 | +18.0 ADU at row 510 |
+| **2026-11-01_05-54-08.1 EG21 · 2.B.Green** | **85.7** | **−31.8 ADU at row 896** |
+| 2026-11-10_02-57-14.7 Feige110 · 2.B.Green (bit 5 stuck on 99.7 %) | 44.1 | +24.5 ADU at row 1646 |
+| every other detector-frame | **≤ 4.4** | stars, 1800 s exposures, twilight, SCI-labelled flats, LDLS flats, arcs, biases, darks |
+
+The z = 20 threshold sits 4.5× above the healthy maximum and 2.2× below the weakest fault; no
+brightness guard is needed. Whole night 2026-11-09/10: the only FAIL change is Feige110,
+PASS → FAIL; in `20261015_16` the only FAIL change is 10-16 03:50, PASS → FAIL (a genuine band
+fault). Cost: ~42 ms CPU per 24-detector frame (~1.7 ms per detector, two thirds of it the
+sort); +22–25 ms on a science frame's `--timing` total with 4 threads (median of 15 interleaved
+runs, 2026-11-13), nothing measurable on calibration frames.
+
+### 6.11 Pixel bit errors → WARN only — `pixel_bit_errors`
+
+Read noise (σ ≈ 2.5 ADU) makes the value histogram of any real image smooth from one value to the
+next; a jump between neighbouring values means the digitised values are corrupted. The metric
+(`qa_engine.code_discontinuity`, type `code_discontinuity`) is defined in §3; the message names the
+value and the bit, e.g. `pixel values jump at value 672 (bit-5 boundary): 78195 -> 3771 pixels;
+digitiser bit errors` (the bit is the lowest set bit of the value). The 23 healthy cameras reach
+at most **0.27** over ~190 frames of every type (2026-04-07 … 11-10); 2.B.Green reads 0.4–5.0,
+always at a multiple of 16. The WARN threshold 0.6 is 2.2× the healthy maximum.
+
+**Bit errors alone do not decide usability**, so this check never FAILs. "Flipped pairs" is the
+fraction of horizontal pixel pairs differing by exactly ±16/32/64/128 ADU (frame-wide; worst
+116-row block in brackets); "code jump" is this metric:
+
+| 2.B.Green frame | usable? | flipped pairs | code jump | division z |
+|---|---|---|---|---|
+| GD71 200 s, 11-10 | yes | 6.6 % | 4.2 | ≤ 4.4 |
+| BPM16274, 10-15 | yes | 2.3–3.0 % | 2.0–3.0 | ≤ 4.4 |
+| **11-01** | **no** | 1.2 % | 2.6 | **86** |
+| **Feige110, 11-10** | **no** | 0.01 % (whole frame stuck) | 1.8 | **44** |
+| **10-16 03:50** | **no** | 4.6 % (21.7 %) | 2.5 | **97** |
+
+A frame is unusable when a contiguous block of rows is read with a stuck bit, which is the
+readout-division signature; `readout_division` FAILs those, `pixel_bit_errors` only WARNs. On
+2026-11-09/10, 19 of 33 science and 11 of 49 calibration frames went PASS → WARN, all
+`pixel_bit_errors@2.B.Green`, and on 2026-10-15/16 23 of 26 science frames did; frames already
+WARN/FAIL kept their verdict. This lasts until the camera is repaired.
+
 ## 7. Automated test inventory
 
-99 pytest tests, all on synthetic MEF files built in a temporary directory (no instrument data
+402 pytest tests, almost all on synthetic MEF files built in a temporary directory (no instrument data
 needed). Run with `pytest` from the repo root.
 
 ### `tests/test_severity_tiers.py` — robust metrics and WARN/FAIL tiers (20)
@@ -616,6 +719,37 @@ needed). Run with `pytest` from the repo root.
 | `test_multiline_system_error_prints_one_line` ×2 | invalid config / YAML syntax error → exactly one stderr line, exit 3 |
 | `test_help_shows_console_script_name` | `--help` shows `usage: llamas-checks` |
 
+### `tests/test_readout_division.py` — science readout division (37)
+
+| test | asserts |
+|---|---|
+| `test_healthy_frames_stay_below_threshold` (×6) | synthetic uint16 frames (σ 2.5 at 667) with tilted 7-row fibres × a column-varying spectrum, sky-line columns, bright 5-row star traces and a 5000 ADU block whose edge varies ±50 % along the columns read z < 20 |
+| `test_whole_bottom_offset_is_a_division` | rows [0:900) +32 → z > 50 at row 900 ± 2 (the 2-row gap), jump ≈ −32 ADU |
+| `test_jump_starting_mid_row_is_found` | the jump starts inside row 897 (column 1000 on) → flagged at 897 ± 2 |
+| `test_band_is_a_division` | a +32 band over rows [500:640) is flagged |
+| `test_saturated_block_is_ignored` | a railed block (rows 600 on) is not a division |
+| `test_float_input_with_nan` | float data with 1 % NaN and three all-NaN rows: step still found, healthy frame still < 20 |
+| `test_too_few_rows_raises` | 2·(32+2+4)+1 rows work, one fewer raises `QAEngineError` |
+| `test_engine_fails_division_and_names_row` / `test_engine_passes_healthy` | synthetic 2-extension `SCI.R-SL` MEF: FAIL `readout_division@2.B.Green` naming detector row 897 ± 2; PASS when healthy |
+| `test_validator_accepts_defaults_and_full_params`, `test_validator_rejects_bad_params` (×17) | every optional parameter is range-checked |
+| `test_shipped_science_config_has_readout_division` | shipped SCIENCE: FAIL at z 20 on `fibre_core`; no calibration set has it |
+| `test_real_nov01_fails_at_row_896`, `test_real_faulty_frames_fail` (×2), `test_real_long_exposure_passes_division` | Box frames (skip when absent): 11-01 FAIL at row 896 ± 2 and only on 2.B.Green; Feige110 02:57 and 10-16 03:50 FAIL; J023 1800 s passes on all 24 detectors |
+
+### `tests/test_bit_errors.py` — pixel bit errors (18)
+
+| test | asserts |
+|---|---|
+| `test_healthy_histogram_is_smooth` (×2) | Gaussian σ 2.5 at 667 (with and without a fibre/spectrum pattern) reads < 0.3 |
+| `test_bit5_stuck_in_40_percent_of_rows` | bit 5 forced on in 40 % of rows → > 0.6 at a multiple of 32 |
+| `test_random_bit5_flips` | 5 % random bit-5 flips on a frame with a sparse lit wing → > 0.6 at a multiple of 32 (a flip is seen where it lands on populated values) |
+| `test_offset_histogram_reports_the_pixel_value` | the code is a pixel value, not a bin index, for any `IntegerHistogram.offset` |
+| `test_constant_or_railed_frame_is_skipped` (×2) | fewer than four qualifying boundaries → `LookupMissError` (SKIPPED) |
+| `test_float_data` | non-integer float data SKIPs; integer-valued float data with NaN gives the integer result |
+| `test_engine_warns_and_names_value_and_bit` | synthetic SCI MEF: WARN (never FAIL) `pixel_bit_errors@2.B.Green`, message names the value and bit; one shared histogram per extension |
+| `test_shipped_bit_rules_never_fail` | SCIENCE and all five calibration rule sets carry exactly one `pixel_bit_errors`, WARN at 0.6 on `full_frame` |
+| `test_validator_accepts_bit_metric`, `test_validator_rejects_bad_bit_params` (×5) | `min_count` positive integer, `max_value` positive number |
+| `test_real_nov01_bit_errors_only_on_2BGreen`, `test_real_usable_gd71_is_warn_not_fail` | Box frames (skip when absent): only 2.B.Green fires on 11-01; GD71 08-04-55.3 is WARN, not FAIL |
+
 ### Regression drivers on real data (not part of `pytest`)
 
 - `scripts/run_qa_tests.py` — the 23-case matrix of §6 through the engine CLI (writes sidecars
@@ -626,7 +760,7 @@ needed). Run with `pytest` from the repo root.
 ## 8. Regenerating
 
 ```bash
-pytest                                                    # 99 synthetic tests
+pytest                                                    # 402 tests; real-frame ones skip without Box
 python scripts/gen_thresholds_doc.py                      # refresh QA_THRESHOLDS_TABLES.md from the YAMLs
 python scripts/gen_examples_doc.py                        # refresh QA_EXAMPLES.md + docs/images/ (all six data roots)
 python scripts/batch_tally.py --baselines-root "$LLAMAS_QA_BASELINES" --out batch_tally.json

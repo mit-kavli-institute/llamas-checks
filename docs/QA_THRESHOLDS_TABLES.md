@@ -60,9 +60,11 @@ Margins over each camera's own baseline median: red WARN +10 / FAIL +16 °C, gre
 | saturation_fraction | WARN | full_frame / saturated_fraction | max 0.02 |
 | edge_saturated | FAIL | bottom_stripe / median | max 63000 |
 | camera_warming_gradient | WARN | full_frame / background_gradient_rate | max 1.3 |
+| readout_division | FAIL | fibre_core / row_division | max 20 |
 | ccd_temperature_warm | WARN | CCDTEMP_1, CCDTEMP1, CCDTEMP-1 | lookup `temp` (per detector) |
 | ccd_temperature_hot | FAIL | CCDTEMP_1, CCDTEMP1, CCDTEMP-1 | lookup `temp` (per detector) |
 | ccd_temperature_shutoff | FAIL | CCDTEMP_1, CCDTEMP1, CCDTEMP-1 | max -60 |
+| pixel_bit_errors | WARN | full_frame / bit_errors | max 0.6 |
 
 ## BIAS (`CAL.R-BIA`)
 
